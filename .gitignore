@@ -1,0 +1,7 @@
+git/
+repro/
+downloads/
+.idea
+*.iml
+plugins/
+.playwright-mcp/
