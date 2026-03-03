@@ -129,6 +129,16 @@ def get_session_token(port: int, email: str = "crowberto@metabase.com",
     return None, last_error
 
 
+def _read_log_tail(repro_dir: str, n: int = 10) -> str:
+    """Read the last n lines of the Metabase log file."""
+    try:
+        with open(repro_path(repro_dir, "metabase.log")) as f:
+            lines = f.readlines()
+            return "".join(lines[-n:])
+    except Exception:
+        return "(could not read log)"
+
+
 def check_setup_token(port: int) -> str:
     """Check if a Metabase instance needs setup. Returns token or empty string."""
     token = _get_setup_token(port)
@@ -183,8 +193,6 @@ def start_metabase(repro_dir: str, version: str, port: int | None = None) -> str
     log_path = repro_path(repro_dir, "metabase.log")
 
     # Start via mage jar-download --run
-    messages = [f"Starting Metabase {version} on port {port}..."]
-
     with open(log_path, "w") as log_file:
         proc = subprocess.Popen(
             [os.path.join(master_dir, "bin", "mage"), "jar-download", version, downloads_dir,
@@ -196,20 +204,12 @@ def start_metabase(repro_dir: str, version: str, port: int | None = None) -> str
 
     write_state_file(repro_dir, "metabase.pid", str(proc.pid))
     write_state_file(repro_dir, "port", str(port))
-    messages.append(f"Metabase PID: {proc.pid}")
 
     # Wait for health check (up to 5 minutes)
     healthy = False
     for i in range(60):
         if not is_pid_running(proc.pid):
-            # Read last lines of log
-            tail = ""
-            try:
-                with open(log_path) as f:
-                    lines = f.readlines()
-                    tail = "".join(lines[-20:])
-            except Exception:
-                pass
+            tail = _read_log_tail(repro_dir)
             return f"ERROR: Metabase process died.\nLast log lines:\n{tail}"
 
         try:
@@ -223,16 +223,8 @@ def start_metabase(repro_dir: str, version: str, port: int | None = None) -> str
         time.sleep(5)
 
     if not healthy:
-        tail = ""
-        try:
-            with open(log_path) as f:
-                lines = f.readlines()
-                tail = "".join(lines[-20:])
-        except Exception:
-            pass
+        tail = _read_log_tail(repro_dir)
         return f"ERROR: Timeout waiting for Metabase after 5 minutes.\nLast log lines:\n{tail}"
-
-    messages.append("Metabase is ready!")
 
     # Determine edition and run setup
     # Strategy: try to authenticate first (EE config-file setup may have already
@@ -240,28 +232,24 @@ def start_metabase(repro_dir: str, version: str, port: int | None = None) -> str
     token = None
     edition = "unknown"
     password = ""
+    setup_error = ""
 
     # Try to authenticate — EE config-file setup may have already created the user
     token, _ = get_session_token(port)  # tries both passwords (EE then OSS)
     if token:
         edition = "EE"
         password = "blackjet"
-        messages.append("EE instance detected (config-file setup).")
     else:
         # Not set up yet — check for setup token and run OSS setup
         setup_token = _get_setup_token(port)
         if setup_token:
             edition = "OSS"
             password = "1Blackjet!"
-            messages.append("Setup token detected — running OSS auto-setup...")
             ok, setup_msg = _do_setup(port, setup_token, password)
-            if ok:
-                messages.append("OSS auto-setup complete.")
-            else:
-                messages.append(f"ERROR: OSS auto-setup failed: {setup_msg}")
+            if not ok:
+                setup_error = f"OSS auto-setup failed: {setup_msg}"
         else:
             # No setup token and no login worked — wait for config-file setup
-            messages.append("Waiting for config-file setup to complete...")
             for _ in range(6):  # up to 30 seconds
                 time.sleep(5)
                 token, _ = get_session_token(port)
@@ -275,28 +263,31 @@ def start_metabase(repro_dir: str, version: str, port: int | None = None) -> str
         token, session_err = get_session_token(port)
     if token:
         write_state_file(repro_dir, "session-token", token)
-        messages.append("Session token saved.")
     else:
-        messages.append(f"ERROR: Could not obtain session token: {session_err}")
+        setup_error = f"Could not obtain session token: {session_err}"
 
     load_state(repro_dir)
 
-    messages.append("")
-    messages.append("=== Metabase Ready ===")
-    messages.append(f"Edition:     {edition}")
-    messages.append(f"Port:        {port}")
-    messages.append(f"Credentials: crowberto@metabase.com / {password}")
-    messages.append(f"URL:         http://localhost:{port}")
+    # Return only the summary block
+    lines = [
+        f"=== Metabase Ready ===",
+        f"Edition:     {edition}",
+        f"Port:        {port}",
+        f"Credentials: crowberto@metabase.com / {password}",
+        f"URL:         http://localhost:{port}",
+    ]
     if token:
-        messages.append(f"Session:     {token}")
-    messages.append("=====================")
+        lines.append(f"Session:     {token}")
+    if setup_error:
+        lines.append(f"WARNING:     {setup_error}")
+    lines.append("=====================")
 
-    return "\n".join(messages)
+    return "\n".join(lines)
 
 
 def stop_metabase(repro_dir: str) -> str:
     """Kill Metabase process tree, remove source worktree, stop appdb."""
-    messages = []
+    actions = []
 
     # Kill Metabase process
     pid_str = read_state_file(repro_dir, "metabase.pid")
@@ -304,60 +295,52 @@ def stop_metabase(repro_dir: str) -> str:
         try:
             pid = int(pid_str)
             if is_pid_running(pid):
-                messages.append(f"Stopping Metabase process tree (root PID {pid})...")
                 kill_tree(pid)
-                messages.append("Metabase stopped.")
-            else:
-                messages.append(f"Process {pid} not running, skipping kill.")
-        except ValueError:
-            messages.append(f"Invalid PID in metabase.pid: {pid_str}")
-        os.remove(repro_path(repro_dir, "metabase.pid"))
-    else:
-        messages.append("No metabase.pid found, skipping kill.")
-
-    # Stop appdb
-    appdb_msg = stop_appdb(repro_dir)
-    messages.append(appdb_msg)
-
-    # Remove source worktree
-    bare_repo = os.path.join(PROJECT_ROOT, "git", "metabase")
-    worktree_path = repro_path(repro_dir, "source")
-    if os.path.isdir(worktree_path):
-        messages.append(f"Removing source worktree at {worktree_path}...")
-        result = run(["git", "-C", bare_repo, "worktree", "remove", "--force", worktree_path])
-        if result.returncode != 0:
-            # Fallback: rm -rf
-            shutil.rmtree(worktree_path, ignore_errors=True)
-        messages.append("Source worktree removed.")
-
-    clear_state(repro_dir)
-    messages.append("Cleanup complete.")
-    return "\n".join(messages)
-
-
-def reset_metabase(repro_dir: str) -> str:
-    """Kill Metabase process and remove DB/log files. Keep env and worktree."""
-    messages = []
-
-    # Kill process
-    pid_str = read_state_file(repro_dir, "metabase.pid")
-    if pid_str:
-        try:
-            pid = int(pid_str)
-            if is_pid_running(pid):
-                messages.append(f"Killing Metabase process tree (root PID {pid})...")
-                kill_tree(pid)
-            else:
-                messages.append(f"Process {pid} not running, skipping kill.")
+                actions.append(f"stopped Metabase (PID {pid})")
         except ValueError:
             pass
         try:
             os.remove(repro_path(repro_dir, "metabase.pid"))
         except FileNotFoundError:
             pass
-        messages.append("Metabase stopped.")
-    else:
-        messages.append("No metabase.pid found, skipping kill.")
+
+    # Stop appdb
+    container_name = read_state_file(repro_dir, "appdb-container.txt")
+    stop_appdb(repro_dir)
+    if container_name:
+        actions.append(f"stopped appdb container '{container_name}'")
+
+    # Remove source worktree
+    bare_repo = os.path.join(PROJECT_ROOT, "git", "metabase")
+    worktree_path = repro_path(repro_dir, "source")
+    if os.path.isdir(worktree_path):
+        result = run(["git", "-C", bare_repo, "worktree", "remove", "--force", worktree_path])
+        if result.returncode != 0:
+            shutil.rmtree(worktree_path, ignore_errors=True)
+        actions.append("removed source worktree")
+
+    clear_state(repro_dir)
+
+    if actions:
+        return f"Stopped {repro_dir}: {', '.join(actions)}."
+    return f"Stopped {repro_dir}: nothing was running."
+
+
+def reset_metabase(repro_dir: str) -> str:
+    """Kill Metabase process and remove DB/log files. Keep env and worktree."""
+    # Kill process
+    pid_str = read_state_file(repro_dir, "metabase.pid")
+    if pid_str:
+        try:
+            pid = int(pid_str)
+            if is_pid_running(pid):
+                kill_tree(pid)
+        except ValueError:
+            pass
+        try:
+            os.remove(repro_path(repro_dir, "metabase.pid"))
+        except FileNotFoundError:
+            pass
 
     # Remove H2 DB files
     for f in ["metabase.mv.db", "metabase.trace.db"]:
@@ -365,14 +348,12 @@ def reset_metabase(repro_dir: str) -> str:
             os.remove(repro_path(repro_dir, f))
         except FileNotFoundError:
             pass
-    messages.append("Removed H2 DB files.")
 
     # Remove log
     try:
         os.remove(repro_path(repro_dir, "metabase.log"))
     except FileNotFoundError:
         pass
-    messages.append("Removed metabase.log.")
 
     # Remove stale state files
     for f in ["port", "session-token"]:
@@ -382,5 +363,4 @@ def reset_metabase(repro_dir: str) -> str:
             pass
 
     clear_state(repro_dir)
-    messages.append("Reset complete. Ready for fresh start_metabase.")
-    return "\n".join(messages)
+    return f"Reset complete. Removed H2 DB and logs for {repro_dir}. Ready for fresh start."

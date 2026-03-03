@@ -2,7 +2,7 @@
   "mcpServers": {
     "metabase-repro": {
       "command": "uv",
-      "args": ["run", "--directory", "/Users/nvoxland/src/metabase/auto-recreate/mcp", "--with", "fastmcp", "python", "-m", "metabase_repro"]
+      "args": ["run", "--directory", "mcp", "--with", "fastmcp", "python", "-m", "metabase_repro"]
     }
   }
 }

@@ -5,6 +5,7 @@ import os
 import re
 
 from .core import repro_path, run, read_state_file
+from .repl import repl_eval as _repl_eval_fn
 
 
 def run_test(repro_dir: str, test_file: str, port: int | None = None) -> str:
@@ -35,27 +36,25 @@ def run_test(repro_dir: str, test_file: str, port: int | None = None) -> str:
         if port_str:
             port = int(port_str)
 
-    if test_file.endswith(".clj"):
-        return _run_clojure_test(source_dir, test_file, port)
+    if test_file.endswith(".clj") or test_file.endswith(".cljc"):
+        return _run_clojure_test(source_dir, test_file, port, repro_dir)
     elif re.search(r"\.unit\.spec\.(ts|tsx|js|jsx)$", test_file):
         return _run_jest_test(source_dir, test_file)
     elif re.search(r"\.cy\.spec\.(ts|tsx|js)$", test_file):
         return _run_cypress_test(source_dir, test_file, port)
     else:
-        return f"ERROR: Unknown test file type: {test_file}\nExpected: *.clj, *.unit.spec.{{ts,tsx}}, or *.cy.spec.{{ts,tsx}}"
+        return f"ERROR: Unknown test file type: {test_file}\nExpected: *.clj, *.cljc, *.unit.spec.{{ts,tsx}}, or *.cy.spec.{{ts,tsx}}"
 
 
-def _run_clojure_test(source_dir: str, test_file: str, port: int | None) -> str:
-    """Run a Clojure test via clj-nrepl-eval."""
+def _run_clojure_test(source_dir: str, test_file: str, port: int | None, repro_dir: str) -> str:
+    """Run a Clojure test via the socket REPL."""
     if not port:
-        return "ERROR: Clojure tests require a port (REPL port = 3000 + port)"
-
-    repl_port = port + 3000
+        return "ERROR: Clojure tests require a running Metabase instance (need port for socket REPL)"
 
     # Derive namespace: test/metabase/foo/bar_test.clj → metabase.foo.bar-test
     ns = test_file
     ns = re.sub(r"^test/", "", ns)
-    ns = re.sub(r"\.clj$", "", ns)
+    ns = re.sub(r"\.cljc?$", "", ns)
     ns = ns.replace("/", ".")
     ns = ns.replace("_", "-")
 
@@ -76,11 +75,7 @@ def _run_clojure_test(source_dir: str, test_file: str, port: int | None) -> str:
     (println "\\nWARNING: Test PASSED — it may not be testing the bug correctly")))
 """
 
-    result = run(
-        ["clj-nrepl-eval", "--port", str(repl_port), clj_code.strip()],
-        timeout=120,
-    )
-    return result.stdout + result.stderr
+    return _repl_eval_fn(repro_dir, clj_code.strip(), timeout=120)
 
 
 def _run_jest_test(source_dir: str, test_file: str) -> str:

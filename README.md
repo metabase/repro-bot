@@ -4,7 +4,7 @@ A Claude Code-powered tool for triaging Metabase bug reports. Given an issue URL
 
 ## Usage
 
-In Claude Code, run against a linear ID:
+In Claude Code, run against a linear ID (don't need plan mode):
 
 ```
 /repro UXW-1234

@@ -17,6 +17,7 @@ from . import metabase
 from . import api
 from . import git
 from . import preflight
+from . import repl
 from . import testing
 
 mcp = FastMCP("metabase-repro")
@@ -106,11 +107,13 @@ def check_setup_token(repro_dir: str) -> str:
 
 
 @mcp.tool()
-def api_call(repro_dir: str, method: str, path: str, body: str = "", jq_filter: str = "") -> str:
+def api_call(repro_dir: str, method: str, path: str, body: str = "",
+             jq_filter: str = "", max_response_chars: int = 10000) -> str:
     """Make an authenticated API call to a running Metabase instance.
 
-    Reads port and session token from state files automatically."""
-    return api.api_call(repro_dir, method, path, body, jq_filter)
+    Reads port and session token from state files automatically.
+    Large responses are truncated to max_response_chars (default 10000). Use jq_filter to narrow results."""
+    return api.api_call(repro_dir, method, path, body, jq_filter, max_response_chars)
 
 
 @mcp.tool()
@@ -147,10 +150,18 @@ def run_test(repro_dir: str, test_file: str, port: Optional[int] = None) -> str:
 
 
 @mcp.tool()
-def get_status() -> str:
-    """Show all known Metabase repro instances and their state.
+def repl_eval(repro_dir: str, code: str, timeout: int = 30) -> str:
+    """Evaluate Clojure code against a running Metabase instance's socket REPL.
 
-    Scans the repro/ directory for repro directories with state files."""
+    The socket REPL is at port 3000 + HTTP_PORT. No nREPL required."""
+    return repl.repl_eval(repro_dir, code, timeout)
+
+
+@mcp.tool()
+def get_status(running_only: bool = False) -> str:
+    """Show Metabase repro instances. Returns compact summary (name, port, running).
+
+    Set running_only=True to show only running instances."""
     repo_dir = os.path.join(PROJECT_ROOT, "repro")
     if not os.path.isdir(repo_dir):
         return json.dumps({"instances": []})
@@ -160,7 +171,11 @@ def get_status() -> str:
         repro_path = os.path.join(repo_dir, entry)
         port_file = os.path.join(repro_path, "port")
         if os.path.isdir(repro_path) and os.path.exists(port_file):
-            state = load_state(f"repro/{entry}")
+            port = ""
+            try:
+                port = open(port_file).read().strip()
+            except (FileNotFoundError, OSError):
+                pass
             pid_file = os.path.join(repro_path, "metabase.pid")
             running = False
             if os.path.exists(pid_file):
@@ -169,8 +184,8 @@ def get_status() -> str:
                     running = is_pid_running(pid)
                 except (ValueError, FileNotFoundError):
                     pass
-            state["name"] = entry
-            state["running"] = running
-            instances.append(state)
+            if running_only and not running:
+                continue
+            instances.append({"name": entry, "port": port, "running": running})
 
-    return json.dumps({"instances": instances}, indent=2)
+    return json.dumps({"instances": instances})

@@ -41,10 +41,38 @@ def setup_master_worktree() -> str:
     return "\n".join(messages)
 
 
+def _resolve_ref(bare_repo: str, version_ref: str, messages: list[str]) -> tuple[str | None, str | None]:
+    """Try version_ref, then OSS fallback, then fetch+retry. Returns (resolved_ref, error)."""
+    refs_to_try = [version_ref]
+    if version_ref.startswith("v1."):
+        refs_to_try.append("v0." + version_ref[3:])
+
+    for ref in refs_to_try:
+        result = run(["git", "-C", bare_repo, "rev-parse", "--verify", ref])
+        if result.returncode == 0:
+            if ref != version_ref:
+                messages.append(f"Tag {version_ref} not found, using OSS tag {ref}")
+            return ref, None
+
+    # Fetch all tags and retry
+    messages.append("Tags not found locally, fetching all tags...")
+    run(["git", "-C", bare_repo, "fetch", "origin", "--tags"])
+
+    for ref in refs_to_try:
+        result = run(["git", "-C", bare_repo, "rev-parse", "--verify", ref])
+        if result.returncode == 0:
+            if ref != version_ref:
+                messages.append(f"Using OSS tag {ref}")
+            return ref, None
+
+    return None, f"ERROR: Could not resolve ref {version_ref} (also tried {refs_to_try})"
+
+
 def setup_worktree(repro_dir: str, version_ref: str) -> str:
     """Create a repro directory and source worktree pinned to a specific version.
 
     Reuses existing worktree at the correct version, or switches in-place.
+    Auto-normalizes EE tags (v1.x.y) to OSS tags (v0.x.y) and fetches missing tags.
     """
     bare_repo = os.path.join(PROJECT_ROOT, "git", "metabase")
 
@@ -52,10 +80,12 @@ def setup_worktree(repro_dir: str, version_ref: str) -> str:
     ensure_dir(repro_path(repro_dir, "playwright"))
     worktree_path = repro_path(repro_dir, "source")
 
-    messages = ["Fetching latest from bare clone..."]
-    result = run(["git", "-C", bare_repo, "fetch", "origin"])
-    if result.returncode != 0:
-        return f"ERROR fetching:\n{result.stderr}"
+    messages = []
+
+    # Resolve the ref (with EE→OSS fallback and auto-fetch)
+    resolved_ref, error = _resolve_ref(bare_repo, version_ref, messages)
+    if error:
+        return error
 
     if os.path.isdir(worktree_path):
         # Check current version
@@ -65,18 +95,19 @@ def setup_worktree(repro_dir: str, version_ref: str) -> str:
             result = run(["git", "-C", worktree_path, "rev-parse", "--short", "HEAD"])
             current_ref = result.stdout.strip()
 
-        if current_ref == version_ref:
-            return f"Worktree already at {version_ref}, reusing."
+        if current_ref == resolved_ref:
+            messages.append(f"Worktree already at {resolved_ref}, reusing.")
+            return "\n".join(messages)
         else:
-            messages.append(f"Worktree exists at {current_ref}, switching to {version_ref}...")
-            result = run(["git", "-C", worktree_path, "checkout", version_ref])
+            messages.append(f"Worktree exists at {current_ref}, switching to {resolved_ref}...")
+            result = run(["git", "-C", worktree_path, "checkout", resolved_ref])
             if result.returncode != 0:
                 return f"ERROR switching worktree:\n{result.stderr}"
-            messages.append(f"Worktree switched to {version_ref}")
+            messages.append(f"Worktree switched to {resolved_ref}")
             return "\n".join(messages)
 
-    messages.append(f"Creating worktree at {worktree_path} from {version_ref}...")
-    result = run(["git", "-C", bare_repo, "worktree", "add", "--detach", worktree_path, version_ref])
+    messages.append(f"Creating worktree at {worktree_path} from {resolved_ref}...")
+    result = run(["git", "-C", bare_repo, "worktree", "add", "--detach", worktree_path, resolved_ref])
     if result.returncode != 0:
         return f"ERROR creating worktree:\n{result.stderr}"
 

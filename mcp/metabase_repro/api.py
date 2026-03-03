@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
 import urllib.error
 import urllib.request
 
@@ -9,7 +11,8 @@ from .core import read_state_file
 
 
 def api_call(repro_dir: str, method: str, path: str,
-             body: str = "", jq_filter: str = "") -> str:
+             body: str = "", jq_filter: str = "",
+             max_response_chars: int = 10000) -> str:
     """Make an authenticated API call to a running Metabase instance.
 
     Reads port and session token from state files. Falls back to API key.
@@ -49,7 +52,8 @@ def api_call(repro_dir: str, method: str, path: str,
             error_body = e.read().decode("utf-8")
         except Exception:
             pass
-        return f"HTTP {e.code} {e.reason}\n{error_body}"
+        truncated = error_body[:500] + ("..." if len(error_body) > 500 else "")
+        return f"HTTP {e.code} {e.reason}\n{truncated}"
     except urllib.error.URLError as e:
         return f"ERROR: Connection failed: {e.reason}"
     except Exception as e:
@@ -60,24 +64,59 @@ def api_call(repro_dir: str, method: str, path: str,
         parsed = json.loads(raw)
         if jq_filter:
             parsed = _apply_filter(parsed, jq_filter)
-        return json.dumps(parsed, indent=2)
+        formatted = json.dumps(parsed, indent=2)
+        if len(formatted) > max_response_chars:
+            formatted = formatted[:max_response_chars] + f"\n... (truncated, {len(formatted)} total chars. Use jq_filter to narrow results)"
+        return formatted
     except (json.JSONDecodeError, ValueError):
         return raw
 
 
+def _is_simple_filter(expr: str) -> bool:
+    """Check if a jq filter uses only simple syntax we handle in Python."""
+    # Simple: .key, .key1.key2, .[N], .[], .[].key
+    # Complex: anything with |, map, select, @, if, etc.
+    for token in ["|", "map", "select", "@", "if ", "as ", "def ", "reduce"]:
+        if token in expr:
+            return False
+    return True
+
+
 def _apply_filter(data, filter_expr: str):
-    """Apply a simple jq-like filter. Supports:
+    """Apply a jq-like filter. Simple patterns handled in Python; complex
+    patterns delegate to the real jq binary if available."""
+    if not filter_expr or filter_expr == ".":
+        return data
+
+    if not _is_simple_filter(filter_expr) and shutil.which("jq"):
+        return _apply_jq_binary(data, filter_expr)
+
+    return _apply_simple_filter(data, filter_expr)
+
+
+def _apply_jq_binary(data, filter_expr: str):
+    """Delegate filtering to the real jq binary."""
+    try:
+        result = subprocess.run(
+            ["jq", filter_expr],
+            input=json.dumps(data),
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode != 0:
+            return {"_jq_error": result.stderr.strip(), "_raw_data": "use jq_filter='' to see full response"}
+        return json.loads(result.stdout)
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, Exception) as e:
+        return {"_jq_error": str(e), "_raw_data": "use jq_filter='' to see full response"}
+
+
+def _apply_simple_filter(data, filter_expr: str):
+    """Apply simple jq-like filters in Python. Supports:
     - .key — access object key
     - .key1.key2 — nested access
     - .[N] — array index
     - .[] — iterate array
     - .[].key — map over array extracting key
-
-    For complex filters, returns data unchanged with a note.
     """
-    if not filter_expr or filter_expr == ".":
-        return data
-
     # Strip leading dot
     expr = filter_expr.lstrip(".")
     if not expr:

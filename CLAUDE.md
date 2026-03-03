@@ -21,9 +21,12 @@ Run `/repro <github-url-or-linear-id>` to investigate and reproduce a Metabase b
 Bare clone at `./git/metabase/` (no working tree). A persistent master worktree lives at `./repro/master/` — it provides the `bin/mage` script for all JAR downloads/runs and serves as a reference for current code. Each `/repro` run also creates an issue-specific worktree at `./repro/<ISSUE-ID>/source/` pinned to the reported version, for reading source at that point in time. Compare `./repro/<ISSUE-ID>/source/` vs `./repro/master/` to check if a bug has been fixed.
 
 ## Clojure REPL
-**NEVER use `clojure-mcp`. ALWAYS use the `clojure-eval` skill.** The `clojure-mcp` tool does not exist in this project and must not be attempted under any circumstances. The correct tool is `clojure-eval`, which wraps `clj-nrepl-eval` from [clojure-mcp-light](https://github.com/bhauman/clojure-mcp-light).
-
-**NEVER use `clojure` CLI, `clojure -M`, or `clojure -X`. ALWAYS use the `clojure-eval` skill or the `mcp__metabase-repro__run_test` tool. Starting a fresh JVM wastes 30-60 seconds per invocation.**
+- **Socket REPL**: The JAR-based Metabase instance starts a socket REPL (not nREPL) at port `3000 + HTTP_PORT`. Use the `repl_eval` MCP tool to evaluate Clojure code — it connects directly to the socket REPL. The `clojure-eval` skill (`clj-nrepl-eval`) will NOT work with the socket REPL.
+- **NEVER use `clojure-mcp`.** The `clojure-mcp` tool does not exist in this project and must not be attempted under any circumstances.
+- **NEVER use `clojure` CLI, `clojure -M`, or `clojure -X`. ALWAYS use the `repl_eval` MCP tool or the `mcp__metabase-repro__run_test` tool.** Starting a fresh JVM wastes 30-60 seconds per invocation.
+- **EE vs OSS tags**: The bare clone at `./git/metabase/` only has OSS tags (`v0.x.y`). EE tags (`v1.x.y`) do not exist. The `setup_worktree` tool auto-converts `v1.x.y` to `v0.x.y`. Both point to the same code.
+- **MCP server base directory**: The `metabase-repro` MCP tools resolve `repro_dir` relative to their own project root (set in `.mcp.json`), NOT relative to the Claude Code CWD. Use absolute paths from tool output (e.g., `setup_worktree` returns the full worktree path). For Grep/Read, use the absolute path returned by the tool.
+- **H2 limitations**: H2 does NOT support `report-timezone`. Timezone-specific bugs cannot be reproduced with H2 — go directly to code analysis.
 
 ## State Files (per repro directory)
 - `<REPRO_DIR>/port` — Metabase HTTP port
@@ -54,6 +57,7 @@ The `metabase-repro` MCP server (configured in `.mcp.json`, code at `mcp/metabas
 | `setup_worktree` | Create issue-specific source worktree |
 | `save_test_patch` | Generate diff of test changes as patch |
 | `run_test` | Run Clojure/Jest/Cypress tests |
+| `repl_eval` | Evaluate Clojure code via socket REPL |
 | `get_status` | Show all running repro instances |
 
 ## Scratch Files

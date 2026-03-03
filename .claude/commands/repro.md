@@ -160,11 +160,7 @@ mcp__metabase-repro__setup_worktree(repro_dir="repro/<ISSUE-ID>", version_ref="v
 
 For `version_ref`, use the git tag matching the version (e.g. `v1.50.2`). If no version was specified in the issue, use the tag for the latest stable release.
 
-> **Tag not found?** The bare clone may not have all tags. If `setup_worktree` fails because a tag doesn't exist, fetch it first:
-> ```bash
-> git -C git/metabase fetch origin tag v1.58.8
-> ```
-> Then retry `setup_worktree`.
+> **Tag resolution**: `setup_worktree` auto-normalizes EE tags (`v1.x.y` → `v0.x.y`) and fetches missing tags automatically. No manual git fetch needed.
 
 ### Start Application Database (if needed)
 
@@ -200,15 +196,11 @@ The tool output tells you:
 
 ### Verify REPL Connection
 
-After Metabase starts, verify the socket REPL is reachable using the `clojure-eval` skill (from [clojure-mcp-light](https://github.com/bhauman/clojure-mcp-light)). The REPL port is `3000 + <PORT>` (e.g. if PORT is 54321, REPL port is 57321).
-
-Use the `clojure-eval` skill with port `<REPL-PORT>`:
-```clojure
-(require '[toucan2.core :as t2])
-(println "REPL connected. DB count:" (t2/count :model/Database))
+After Metabase starts, verify the socket REPL is reachable using the `repl_eval` MCP tool:
 ```
-
-If the REPL doesn't connect, check `./repro/<ISSUE-ID>/metabase.log` for errors.
+mcp__metabase-repro__repl_eval(repro_dir="repro/<ISSUE-ID>", code="(+ 1 2 3)")
+```
+Expected: `6`. If it returns an error, check `./repro/<ISSUE-ID>/metabase.log` for errors.
 
 ### Pre-Configured Users and API Keys
 
@@ -301,13 +293,15 @@ Navigate to `http://localhost:<PORT>` (use the port from `start_metabase` output
 
 **Chart interaction**: Metabase charts use `[data-testid="visualization-root"]` as the container. To hover over chart elements, use `browser_run_code` with `page.locator('[data-testid="visualization-root"]')` to get the bounding box, then `page.mouse.move()` to specific coordinates within it. Use `page.waitForTimeout(ms)` (not `setTimeout`) for delays in Playwright MCP code.
 
-### REPL Access (clojure-eval skill)
+### REPL Access (repl_eval MCP tool)
 
-> **NEVER use `clojure` CLI, `clojure -M`, or `clojure -X`. ALWAYS use the `clojure-eval` skill or `mcp__metabase-repro__run_test`. Starting a fresh JVM wastes 30-60 seconds per invocation.**
+> **NEVER use `clojure` CLI, `clojure -M`, or `clojure -X`. ALWAYS use the `repl_eval` MCP tool or `mcp__metabase-repro__run_test`. Starting a fresh JVM wastes 30-60 seconds per invocation.**
 
-The REPL is the **primary investigation tool** — prefer it over API calls for data setup, state inspection, and root cause exploration. Connect to the socket REPL at port `3000 + <PORT>`. Use `clojure-eval` with `--discover-ports` or specify the port directly.
+The REPL is the **primary investigation tool** — prefer it over API calls for data setup, state inspection, and root cause exploration. Use the `repl_eval` MCP tool which connects directly to the socket REPL:
 
-Working directory: `./repro/<ISSUE-ID>/source/` (the per-run worktree)
+```
+mcp__metabase-repro__repl_eval(repro_dir="repro/<ISSUE-ID>", code="(require '[toucan2.core :as t2]) (t2/count :model/Database)")
+```
 
 **When to use the REPL**:
 - **Before any API call**: Consider if the REPL is faster/more direct
@@ -409,6 +403,11 @@ mcp__metabase-repro__api_call(repro_dir="repro/<ISSUE-ID>", method="POST", path=
 mcp__metabase-repro__api_call(repro_dir="repro/<ISSUE-ID>", method="GET", path="/database/1/metadata")
 ```
 
+**Avoid large API responses**: Never call `/table` without a narrow jq_filter — it returns all system tables (400K+ chars). For field discovery, use:
+```
+api_call(method="GET", path="/database/1/fields", jq_filter="[.[] | select(.table_name == \"ORDERS\") | {id, name, table: .table_name}]")
+```
+
 ### Documentation Reference
 
 When encountering Metabase-specific terminology (dashboards, questions, models, segments, metrics, subscriptions, etc.):
@@ -434,7 +433,7 @@ Evaluate:
 
 > **Gate**: Only run this phase when the reproduction status is **REPRODUCED** AND a root cause hypothesis has been identified. If the status is NOT REPRODUCED, INCONCLUSIVE, or no root cause was found, skip to Phase 6.
 
-> **NEVER use `clojure` CLI, `clojure -M`, or `clojure -X`. ALWAYS use the `clojure-eval` skill or `mcp__metabase-repro__run_test`. Starting a fresh JVM wastes 30-60 seconds per invocation.**
+> **NEVER use `clojure` CLI, `clojure -M`, or `clojure -X`. ALWAYS use the `repl_eval` MCP tool or `mcp__metabase-repro__run_test`. Starting a fresh JVM wastes 30-60 seconds per invocation.**
 
 > **Reference**: The `CLAUDE.md` file in `./repro/<ISSUE-ID>/source/` contains detailed instructions for writing and running both backend (Clojure) and frontend (TypeScript/Jest/Cypress) tests — including conventions, test locations, commands, and patterns. **Read it before writing any test.**
 
@@ -637,15 +636,17 @@ No user notification needed — the Linear comment is the deliverable.
 
 ## Phase 8: Self-Review
 
-After cleanup, review your own execution transcript and append findings to `./repro/<ISSUE-ID>/SUGGESTIONS.md`. This creates a per-issue record of improvement suggestions that can later be consolidated into tooling and prompt changes.
+After cleanup, review your own execution transcript and append findings to `./repro/<ISSUE-ID>/SUGGESTIONS.md`. This creates a per-issue record of improvement suggestions that `/auto-improve` later consolidates into tooling and prompt changes.
 
 ### What to review
 
 Scan the full conversation for:
 
-1. **Permission prompts triggered** — any tool call that required user approval. Note what caused it and how the approach could be restructured to avoid it.
-2. **Efficiency losses** — turns spent on dead ends, retries, wrong approaches, or unnecessary exploration. Note what could be done differently.
-3. **Token waste** — verbose command output that could be truncated, unnecessary file reads, large error responses that could be summarized, or searches that returned too many results.
+1. **MCP server issues** — tool errors, missing params, bad defaults, unhelpful error messages, or missing functionality that forced a bash fallback.
+2. **Prompt gaps** — missing steps, unclear instructions, wrong ordering, or missing edge cases in `.claude/commands/repro.md`.
+3. **Knowledge gaps** — facts that should be in `CLAUDE.md` but weren't (e.g., H2 timezone limits, version tag formats).
+4. **Permission prompts** — any tool call that required user approval and could be restructured to avoid it.
+5. **Memory-worthy patterns** — stable lessons learned that should persist across sessions.
 
 ### Output format
 
@@ -654,23 +655,39 @@ Write findings to `./repro/<ISSUE-ID>/SUGGESTIONS.md`:
 ```markdown
 ## <ISSUE-ID> — <DATE>
 
-| # | Category | Issue | Est. Waste | Proposed Fix |
-|---|----------|-------|------------|--------------|
-| 1 | Permission | `curl` triggered approval prompt | 1 turn | Use `api_call` MCP tool instead |
-| 2 | Efficiency | Searched 3 wrong directories for config | 3 turns | Read CLAUDE.md first |
-| 3 | Token waste | `git log` dumped 500 lines | ~2k tokens | Limit to `git log -20 --oneline` |
-
-### Notes
-- Brief bullet points on any other observations
-- Patterns noticed across multiple runs (if prior sections exist)
+| # | Category | Target File | Issue | Proposed Fix |
+|---|----------|-------------|-------|--------------|
+| 1 | MCP server | `mcp/metabase_repro/metabase.py` | [start-timeout] `start_metabase` doesn't report last log lines on timeout | Add: read last 30 lines of `metabase.log` and include in error response when startup exceeds 5 min |
+| 2 | Prompt | `.claude/commands/repro.md` | [version-fallback] Phase 2 doesn't explain what to do when version tag has no JAR | In Phase 2, after version extraction, add: "If `jar_download` fails, try the latest stable release via `gh release list`" |
+| 3 | CLAUDE.md | `CLAUDE.md` | [h2-json] H2 doesn't support JSON column type | Add to CLAUDE.md Notes section: "H2 doesn't support JSON columns — use TEXT and cast in queries" |
+| 4 | Permission | `.claude/commands/repro.md` | [curl-approval] Used `curl` instead of `api_call`, triggered approval | In Phase 4, add reminder: "NEVER use curl/wget — always use `api_call` MCP tool" |
+| 5 | Memory | `memory/metabase-quirks.md` | [ee-token-log] EE token errors flood the log but are harmless without a license | Persist: "Ignore 'Token validation failed' log messages in OSS/unlicensed runs" |
 ```
+
+### Category reference
+
+Use **exactly** one of these categories per row (must match `/auto-improve` buckets):
+
+| Category | Meaning | Typical target file |
+|----------|---------|---------------------|
+| `MCP server` | Bug or improvement in MCP tool code | `mcp/metabase_repro/*.py` |
+| `Prompt` | Change needed in the repro command | `.claude/commands/repro.md` |
+| `CLAUDE.md` | Knowledge gap — fact that should be documented | `CLAUDE.md` |
+| `New tool` | Missing MCP tool functionality causing bash fallback | `mcp/metabase_repro/server.py` |
+| `Permission` | Action that triggered unnecessary user approval | Various |
+| `Memory` | Stable pattern to persist in memory files | `memory/*.md` |
 
 ### Rules
 - **One file per issue** — write to `./repro/<ISSUE-ID>/SUGGESTIONS.md`, not the project root
-- **Be detailed in proposed fixes** — don't just say "change the prompt" or "update repro.md". Specify the exact file, section, and what the change should be (e.g., "In `.claude/commands/repro.md` Phase 3, add a note after the `start_metabase` call: 'If start_metabase reports an error in its output, STOP immediately'"). The goal is that someone reading SUGGESTIONS.md can implement the fix without re-reading the full transcript.
+- **Deduplication tags** — every Issue cell must start with a `[kebab-case-tag]` (e.g., `[socket-repl]`, `[ee-oss-tags]`, `[api-truncation]`). These tags enable frequency counting across runs via grep.
+- **Be specific in proposed fixes** — every item must include:
+  1. The **exact file path** to change
+  2. The **exact section/location** within that file (e.g., "Phase 3, after the `start_metabase` call")
+  3. The **actual text to add or change** (or a close approximation) — not "update the prompt" but the literal addition/edit
 - **Be actionable** — every item must propose a concrete fix (tool change, prompt change, or behavioral rule)
 - **No subagents** — do this review inline; you have the full transcript in context
-- **Skip if clean** — if the run had no issues worth noting, append a one-line section: `## <ISSUE-ID> — <DATE>\n\nClean run — no issues.`
+- **Skip if clean** — if the run had no issues worth noting, write: `## <ISSUE-ID> — <DATE>\n\nClean run — no issues.`
+- **Observations** — if there are findings that don't fit the table (e.g., "code analysis approach was effective"), add them as a `### Observations` section with 2-3 bullets max. Do not add a freeform "Notes" section.
 
 ---
 
