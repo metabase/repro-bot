@@ -50,13 +50,6 @@ def check_setup() -> str:
         else:
             messages.append("OK: docker is available")
 
-    # --- clojure-eval (clojure-mcp-light) ---
-    if not shutil.which("clj-nrepl-eval"):
-        messages.append("MISSING: clj-nrepl-eval is not installed (install from https://github.com/bhauman/clojure-mcp-light)")
-        ok = False
-    else:
-        messages.append("OK: clj-nrepl-eval is installed")
-
     # --- Playwright browsers ---
     if platform.system() == "Darwin":
         pw_cache = os.path.join(os.path.expanduser("~"), "Library", "Caches", "ms-playwright")

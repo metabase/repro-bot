@@ -22,6 +22,23 @@ Examples:
 
 > **Code search**: ALWAYS search Metabase source code using Grep/Glob against local worktrees (`./repro/master/`, `./repro/<ISSUE-ID>/source/`). NEVER use `gh api search/code` or `gh search code` — these GitHub code search APIs are slow, rate-limited, and return incomplete results.
 
+> **CI mode**: When the `GITHUB_ACTIONS_RUN_URL` environment variable is set, this workflow is running in GitHub Actions CI. In CI mode:
+> - If **any phase fails catastrophically** (MCP tool errors, preflight failures, Metabase startup failures, or unrecoverable errors), post the error to Linear as an internal-only comment before stopping. The comment must include:
+>   1. A summary of what failed and the exact error message
+>   2. Which phase the failure occurred in
+>   3. A link to the CI run: `[CI Run](${GITHUB_ACTIONS_RUN_URL})`
+> - Use this format for CI failure comments:
+>   ```markdown
+>   ## Repro-Bot CI Failure
+>   **Phase**: <phase number and name>
+>   **Error**: <exact error message>
+>   **CI Run**: [View logs](${GITHUB_ACTIONS_RUN_URL})
+>
+>   <Additional context about what was attempted>
+>   ```
+> - If a Linear issue ID has been resolved, post the failure comment to that issue. If not (e.g., failure happened before Linear resolution in Phase 1), log the error to the console — it will be captured in the CI run logs.
+> - The SUGGESTIONS.md file should still be written (Phase 8) even if the reproduction failed, to capture what went wrong for `/auto-improve`.
+
 ---
 
 ## Phase 0: Pre-flight Check
@@ -72,6 +89,8 @@ Linear already syncs the full GitHub issue body — do NOT separately call `gh i
 - If starting from Linear: extract the GitHub URL from the issue description or attachments. Do NOT fetch GitHub separately — Linear has all the content.
 
 Resolve both GitHub and Linear identifiers before proceeding.
+
+> **REQUIRED**: A linked Linear issue is **mandatory**. If no Linear issue can be found for the GitHub issue (no cross-link in the issue body/comments, and `list_issues` search returns no match), **STOP the entire /repro workflow immediately**. Tell the user: "No linked Linear issue found for this GitHub issue. Please create or link a Linear issue before running /repro — the investigation report must be posted to Linear." In CI mode, log this message to the console. Do NOT proceed to Phase 2 or beyond.
 
 > **IMPORTANT**: NEVER use web search (WebSearch, WebFetch) to look up issue details. All issue data must come from the `gh` CLI (for GitHub) or Linear MCP tools (for Linear). If both fail, stop and report the error to the user — do not fall back to searching the web.
 
@@ -610,10 +629,20 @@ mcp__plugin_productivity_linear__create_attachment(
 )
 ```
 
+### CI Run Link
+
+If `GITHUB_ACTIONS_RUN_URL` is set (CI mode), append to the Linear comment body:
+
+```markdown
+---
+*Investigated by [Repro-Bot CI](${GITHUB_ACTIONS_RUN_URL})*
+```
+
 ### Fallback
 
-If no Linear issue was found or resolved, print the full report to terminal and ask:
-> "Could not find a linked Linear issue. What is the Linear ID for this issue? (e.g., MB-1234)"
+If no Linear issue was found or resolved:
+- **In CI mode** (`GITHUB_ACTIONS_RUN_URL` is set): Print the full report to the console. Do NOT ask the user — there is no interactive user in CI.
+- **In interactive mode**: Print the full report to terminal and ask: "Could not find a linked Linear issue. What is the Linear ID for this issue? (e.g., MB-1234)"
 
 ---
 
