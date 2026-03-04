@@ -2,6 +2,10 @@
 
 A Claude Code-powered tool for triaging Metabase bug reports. Given an issue URL, it spins up a fresh Metabase instance, attempts to reproduce the bug, and posts a structured investigation report to Linear.
 
+## Demo
+
+https://www.loom.com/share/ce80dbdfba914e71868912ce4bed4cc8
+
 ## Usage
 
 In Claude Code, run against a linear ID (don't need plan mode):

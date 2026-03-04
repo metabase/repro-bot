@@ -14,6 +14,8 @@ Examples:
 
 > **CRITICAL**: Use `mcp__metabase-repro__*` MCP tools for ALL Metabase operations (starting/stopping instances, API calls, worktree management, test running). These tools handle state management, authentication, and process lifecycle automatically — no shell scripts needed. **NEVER fall back to raw Bash** (curl, java -jar, docker run, etc.) for any operation that an MCP tool handles. If any `mcp__metabase-repro__*` tool fails — whether with a connection/server error OR an error in its output (e.g. "auto-setup failed", "could not obtain session token") — **STOP the entire /repro workflow immediately** and report the exact error to the user so the MCP server code can be fixed. Do NOT attempt to work around MCP tool failures with manual curl/bash commands.
 
+> **Browser automation**: Use `playwright-cli` (installed as a Claude Code skill) for all browser automation. Run commands via the Bash tool (e.g. `playwright-cli goto https://...`). Do NOT use playwright-cli tools (`mcp__playwright__*`) — they are not configured. See the skill documentation at `.claude/skills/playwright-cli/SKILL.md` for the full command reference.
+
 > **Tooling assumption**: The Linear MCP tools (`mcp__plugin_productivity_linear__*`) are already connected and authenticated. Call them directly from the main agent — do NOT delegate Linear MCP calls to subagents (Task tool), as subagents cannot access MCP tools. Do not search for a Linear CLI, check for API keys, or verify authentication. If a Linear MCP call fails, report the error and move on.
 
 > **Source exploration**: NEVER use Task/Explore agents for code analysis. Use direct Grep calls — they cost ~100 tokens vs 50K-100K for a subagent. Start with targeted Grep searches (specific component/function names). Multiple sequential Grep calls are always cheaper than a single Explore agent.
@@ -38,14 +40,14 @@ If it fails with a different error (connection refused, server crashed, etc.), *
 
 If the check reports missing items, **STOP the entire /repro workflow immediately.** Do NOT continue to any subsequent steps. Do NOT attempt to diagnose, work around, or check individual components yourself — the user will fix the issue before re-running.
 
-### Verify Playwright MCP Tools
+### Verify Playwright CLI
 
-After pre-flight passes, verify Playwright MCP tools are available by calling:
-```
-mcp__playwright__browser_navigate(url="about:blank")
+After pre-flight passes, verify `playwright-cli` is available by running:
+```bash
+playwright-cli --version
 ```
 
-If this returns "No such tool available" or any connection error, **STOP immediately** and tell the user: "Playwright MCP tools are not available. Please configure the Playwright MCP server in `.mcp.json` and restart before running /repro. Playwright is required for reproducing frontend issues."
+If this fails, **STOP immediately** and tell the user: "playwright-cli is not available. Run `npm install -g @playwright/cli@latest && playwright-cli install --skills` and restart before running /repro. Playwright is required for reproducing frontend issues."
 
 Do NOT continue with a code-analysis-only approach — Playwright is a hard requirement.
 
@@ -252,7 +254,7 @@ Select strategy based on issue classification. Strategies can be combined within
 
 | Issue Type | Primary Strategy |
 |------------|-----------------|
-| UI / frontend behavior | **Playwright MCP** + **REPL** for data setup |
+| UI / frontend behavior | **playwright-cli** + **REPL** for data setup |
 | Setup steps described in issue | **REPL** for data setup, **Playwright** for UI verification |
 | API / endpoint behavior | **REPL** (invoke handler functions directly) or MCP `api_call` |
 | Query results / SQL generation | **REPL**: `qp/process-query` or `qp.compile/compile` |
@@ -270,31 +272,42 @@ Select strategy based on issue classification. Strategies can be combined within
 
 > **Codebase guidance**: Both `./repro/<ISSUE-ID>/source/` and `./repro/master/` contain a `CLAUDE.md` file with detailed instructions for navigating the Metabase codebase — read it when exploring source code. It documents conventions, key directories, and patterns that will help you find what you need faster.
 
-### Browser Automation (Playwright MCP)
+### Browser Automation (playwright-cli)
 
-After logging in, navigate directly to the target page — do NOT snapshot intermediate pages (home, browse) unless they're part of the reproduction. Use `browser_navigate` to go straight to the relevant URL.
+Use `playwright-cli` via the Bash tool for all browser automation. After logging in, navigate directly to the target page — do NOT snapshot intermediate pages (home, browse) unless they're part of the reproduction.
 
 **Token reduction rules**:
-- Prefer `browser_take_screenshot` over `browser_snapshot` for verification — screenshots have a fixed token cost, while snapshots of complex pages (especially data tables, pivot tables) can be unbounded
+- Prefer `playwright-cli screenshot` over `playwright-cli snapshot` for verification — screenshots have a fixed token cost, while snapshots of complex pages (especially data tables, pivot tables) can be unbounded
 - **Never** snapshot pivot tables or large data views — use the API to verify data correctness instead
 - Use API calls (`POST /api/card`, `POST /api/dataset`) to create questions, apply filters, and set up state — reserve Playwright only for final visual verification of the bug
 - Navigate directly to `/question/<ID>` or `/dashboard/<ID>` instead of clicking through menus
-- Only use `browser_snapshot` when you need to find a specific interactive element (button, input field) to click
+- Only use `playwright-cli snapshot` when you need to find a specific interactive element (button, input field) to click
 
-Navigate to `http://localhost:<PORT>` (use the port from `start_metabase` output):
-- `mcp__playwright__browser_navigate` to load pages
-- `mcp__playwright__browser_click`, `mcp__playwright__browser_fill_form` to follow UI steps from the issue
-- `mcp__playwright__browser_take_screenshot` to capture evidence — always save screenshots to `./repro/<ISSUE-ID>/playwright/` (e.g. `./repro/UXW-2902/playwright/screenshot.png`), not the project root
-- `mcp__playwright__browser_snapshot` to get the accessibility tree for finding elements — use sparingly (see rules above)
-- If setup steps are described in the issue (e.g. "create a dashboard, add a question, click X"), prefer API calls for setup and Playwright only for the final reproduction/verification
+**Commands** (use the port from `start_metabase` output):
+```bash
+# Open browser and navigate
+playwright-cli open http://localhost:<PORT>/auth/login
+# Take a snapshot to get element refs
+playwright-cli snapshot
+# Fill form fields using refs from snapshot
+playwright-cli fill <ref> "value"
+# Click elements using refs from snapshot
+playwright-cli click <ref>
+# Navigate to a new URL
+playwright-cli goto http://localhost:<PORT>/question/1
+# Take screenshot — save to repro dir
+playwright-cli screenshot --filename=./repro/<ISSUE-ID>/playwright/screenshot.png
+# Close browser when done
+playwright-cli close
+```
 
-**Login shortcut**: After navigating to `/auth/login`, fill the form **without snapshotting** — the fields are always `textbox "Email address"` and `textbox "Password"`, and the button is `button "Sign in"`. Use `browser_fill_form` with these descriptive names and `browser_click` directly. Check `start_metabase` output for the password: `blackjet` for EE, `1Blackjet!` for OSS.
+**Login shortcut**: After opening the login page, take a snapshot to get element refs, then fill the email and password fields and click the sign-in button. Check `start_metabase` output for the password: `blackjet` for EE, `1Blackjet!` for OSS.
 
-**Avoid snapshot after login**: The sign-in click navigates to the home page which has a very large DOM. Do NOT snapshot the home page. Instead, immediately `browser_navigate` to the target URL (e.g. `/question/<ID>`, `/dashboard/<ID>`).
+**Avoid snapshot after login**: The sign-in click navigates to the home page which has a very large DOM. Do NOT snapshot the home page. Instead, immediately `playwright-cli goto` the target URL (e.g. `/question/<ID>`, `/dashboard/<ID>`).
 
-**"Start exploring" modal**: Metabase shows a "Start exploring" modal when viewing a saved native question for the first time. Be prepared for an extra click to dismiss it — click `button "Start exploring"` if it appears.
+**"Start exploring" modal**: Metabase shows a "Start exploring" modal when viewing a saved native question for the first time. Be prepared for an extra click to dismiss it — snapshot to find the button ref and click it.
 
-**Chart interaction**: Metabase charts use `[data-testid="visualization-root"]` as the container. To hover over chart elements, use `browser_run_code` with `page.locator('[data-testid="visualization-root"]')` to get the bounding box, then `page.mouse.move()` to specific coordinates within it. Use `page.waitForTimeout(ms)` (not `setTimeout`) for delays in Playwright MCP code.
+**Chart interaction**: Metabase charts use `[data-testid="visualization-root"]` as the container. To hover over chart elements, use `playwright-cli run-code` with Playwright page API calls to get bounding boxes and move the mouse. Use `page.waitForTimeout(ms)` (not `setTimeout`) for delays in run-code.
 
 ### REPL Access (repl_eval MCP tool)
 
@@ -543,7 +556,7 @@ Choose one:
 ### Compose Linear Comment
 
 ```markdown
-## [Auto-Reproduce] Investigation Report
+## Repro-Bot Investigation
 
 **Status**: REPRODUCED / NOT REPRODUCED / INCONCLUSIVE
 **Metabase Version**: <version tested>
@@ -702,7 +715,7 @@ Use **exactly** one of these categories per row (must match `/auto-improve` buck
 | JAR download fails | Report the error and the version string that was tried; suggest checking version format |
 | Metabase fails to start within 5 minutes | Report the last 30 lines of `metabase.log`, stop investigation |
 | Metabase needs a clean restart | Use `mcp__metabase-repro__reset_metabase(repro_dir="repro/<ISSUE-ID>")` then `start_metabase` again |
-| Frontend-only issue (no API/SQL) | Use Playwright MCP; mark INCONCLUSIVE only if Playwright is unavailable |
+| Frontend-only issue (no API/SQL) | Use playwright-cli; mark INCONCLUSIVE only if Playwright is unavailable |
 | Driver-specific issue (Postgres, MySQL) | Note that H2 was used; mark INCONCLUSIVE with a note about environment requirements |
 | Issue has no repro steps | Attempt reproduction based on title and description alone; note the absence of steps in report |
 | Prior auto-reproduce comment exists | Note the prior investigation in the report, proceed anyway with fresh investigation |
