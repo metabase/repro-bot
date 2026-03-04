@@ -1,0 +1,115 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "clj-paren-repair-claude-hook --cljfmt"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "clj-paren-repair-claude-hook --cljfmt"
+          }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(base64 *)",
+      "Bash(cat *)",
+      "Bash(cd *)",
+      "Bash(clj-nrepl-eval *)",
+      "Bash(curl *)",
+      "Bash(curl:*)",
+      "Bash(echo *)",
+      "Bash(find *)",
+      "Bash(gh api repos/metabase/metabase/*)",
+      "Bash(gh issue list * --repo metabase/metabase *)",
+      "Bash(gh issue view * --repo metabase/metabase *)",
+      "Bash(gh release *)",
+      "Bash(gh search *)",
+      "Bash(git *)",
+      "Bash(grep *)",
+      "Bash(head *)",
+      "Bash(jq *)",
+      "Bash(kill *)",
+      "Bash(ls *)",
+      "Bash(mkdir *)",
+      "Bash(pgrep *)",
+      "Bash(printf *)",
+      "Bash(ps *)",
+      "Bash(python -m mcp.metabase_repro *)",
+      "Bash(python3 *)",
+      "Bash(sed *)",
+      "Bash(sort *)",
+      "Bash(strings *)",
+      "Bash(tail *)",
+      "Bash(wc *)",
+      "Bash(which *)",
+      "Bash(xargs *)",
+      "Edit(//./**)",
+      "Read(//.claude/**)",
+      "WebFetch(domain:docs.metabase.com)",
+      "WebFetch(domain:metabase.com)",
+      "WebFetch(domain:www.metabase.com)",
+      "WebSearch",
+      "Write(//./**)",
+      "mcp__metabase-repro__api_call",
+      "mcp__metabase-repro__check_setup",
+      "mcp__metabase-repro__check_setup_token",
+      "mcp__metabase-repro__create_env",
+      "mcp__metabase-repro__get_session_token",
+      "mcp__metabase-repro__get_status",
+      "mcp__metabase-repro__jar_download",
+      "mcp__metabase-repro__reset_metabase",
+      "mcp__metabase-repro__run_test",
+      "mcp__metabase-repro__save_test_patch",
+      "mcp__metabase-repro__setup_master_worktree",
+      "mcp__metabase-repro__setup_worktree",
+      "mcp__metabase-repro__start_appdb",
+      "mcp__metabase-repro__start_metabase",
+      "mcp__metabase-repro__stop_appdb_tool",
+      "mcp__metabase-repro__stop_metabase",
+      "mcp__playwright__browser_click",
+      "mcp__playwright__browser_close",
+      "mcp__playwright__browser_console_messages",
+      "mcp__playwright__browser_drag",
+      "mcp__playwright__browser_evaluate",
+      "mcp__playwright__browser_file_upload",
+      "mcp__playwright__browser_fill_form",
+      "mcp__playwright__browser_handle_dialog",
+      "mcp__playwright__browser_hover",
+      "mcp__playwright__browser_navigate",
+      "mcp__playwright__browser_navigate_back",
+      "mcp__playwright__browser_network_requests",
+      "mcp__playwright__browser_press_key",
+      "mcp__playwright__browser_resize",
+      "mcp__playwright__browser_run_code",
+      "mcp__playwright__browser_select_option",
+      "mcp__playwright__browser_snapshot",
+      "mcp__playwright__browser_tabs",
+      "mcp__playwright__browser_take_screenshot",
+      "mcp__playwright__browser_type",
+      "mcp__playwright__browser_wait_for",
+      "mcp__plugin_productivity_linear__create_attachment",
+      "mcp__plugin_productivity_linear__create_comment",
+      "mcp__plugin_productivity_linear__get_issue",
+      "mcp__plugin_productivity_linear__list_comments",
+      "mcp__plugin_productivity_linear__list_issues"
+    ]
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "metabase-repro"
+  ]
+}
