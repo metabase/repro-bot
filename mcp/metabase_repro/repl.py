@@ -29,6 +29,8 @@ def repl_eval(repro_dir: str, code: str, timeout: int = 30) -> str:
         result = _read_until_prompt(sock, timeout)
 
         sock.close()
+        if not result.strip():
+            return f"ERROR: REPL eval timed out after {timeout}s — no response received. Try increasing timeout."
         return result.strip()
     except socket.timeout:
         return f"ERROR: Socket REPL timed out after {timeout}s"
@@ -61,4 +63,7 @@ def _read_until_prompt(sock: socket.socket, timeout: int = 30) -> str:
                 return "\n".join(result_lines)
         except socket.timeout:
             continue
-    return data.decode("utf-8", errors="replace")
+    text = data.decode("utf-8", errors="replace")
+    if text.strip():
+        return f"{text}\n\n[WARN: REPL response may be incomplete — timed out after {timeout}s without seeing prompt]"
+    return ""

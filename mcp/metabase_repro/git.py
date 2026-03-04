@@ -11,10 +11,18 @@ def setup_master_worktree() -> str:
     bare_repo = os.path.join(PROJECT_ROOT, "git", "metabase")
     master_dir = os.path.join(PROJECT_ROOT, "repro", "master")
 
-    if not os.path.isdir(bare_repo):
-        return f"ERROR: Bare repo not found at {bare_repo}"
+    messages = []
 
-    messages = ["Fetching latest from bare clone..."]
+    if not os.path.isdir(bare_repo):
+        messages.append(f"Bare repo not found at {bare_repo}, cloning from GitHub...")
+        messages.append("WARNING: This will download ~1.6GB and may take several minutes.")
+        os.makedirs(os.path.dirname(bare_repo), exist_ok=True)
+        result = run(["git", "clone", "--bare", "https://github.com/metabase/metabase.git", bare_repo])
+        if result.returncode != 0:
+            return f"ERROR: Failed to clone bare repo:\n{result.stderr}"
+        messages.append("Bare repo cloned successfully.")
+
+    messages.append("Fetching latest from bare clone...")
     result = run(["git", "-C", bare_repo, "fetch", "origin"])
     if result.returncode != 0:
         return f"ERROR fetching:\n{result.stderr}"

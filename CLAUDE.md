@@ -5,7 +5,7 @@ Run `/repro <github-url-or-linear-id>` to investigate and reproduce a Metabase b
 ## Requirements
 - `gh` CLI authenticated (`gh auth status`)
 - Linear MCP tools available
-- Playwright MCP configured (for UI reproduction)
+- Playwright MCP server configured in `.mcp.json` (REQUIRED — `/repro` will not proceed without it)
 - `metabase-repro` MCP server running (configured in `.mcp.json`)
 - `jq` installed (for JSON parsing)
 - Internet access to download Metabase JARs
@@ -59,6 +59,10 @@ The `metabase-repro` MCP server (configured in `.mcp.json`, code at `mcp/metabas
 | `run_test` | Run Clojure/Jest/Cypress tests |
 | `repl_eval` | Evaluate Clojure code via socket REPL |
 | `get_status` | Show all running repro instances |
+
+## Code Search
+- **ALWAYS search code using Grep/Glob against local worktrees** (`./repro/master/`, `./repro/<ISSUE-ID>/source/`). These contain the full Metabase source.
+- **NEVER use `gh api search/code`** or `gh search code` — these GitHub code search APIs are slow, rate-limited, and return incomplete results. All code exploration must use local files.
 
 ## Scratch Files
 Each investigation writes to `./repro/<ISSUE-ID>/scratch.md` (ephemeral, not committed).

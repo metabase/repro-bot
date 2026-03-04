@@ -20,6 +20,8 @@ Examples:
 
 > **File searches**: NEVER search outside the project directory. Always scope Grep/Glob/find to `./repro/` or specific subdirectories. Never use `find /` or search the home directory — it wastes turns and triggers permission prompts.
 
+> **Code search**: ALWAYS search Metabase source code using Grep/Glob against local worktrees (`./repro/master/`, `./repro/<ISSUE-ID>/source/`). NEVER use `gh api search/code` or `gh search code` — these GitHub code search APIs are slow, rate-limited, and return incomplete results.
+
 ---
 
 ## Phase 0: Pre-flight Check
@@ -36,17 +38,16 @@ If it fails with a different error (connection refused, server crashed, etc.), *
 
 If the check reports missing items, **STOP the entire /repro workflow immediately.** Do NOT continue to any subsequent steps. Do NOT attempt to diagnose, work around, or check individual components yourself — the user will fix the issue before re-running.
 
-### Load All Deferred Tools
+### Verify Playwright MCP Tools
 
-Immediately after pre-flight passes, load all deferred tools with exactly **five parallel ToolSearch calls**:
+After pre-flight passes, verify Playwright MCP tools are available by calling:
+```
+mcp__playwright__browser_navigate(url="about:blank")
+```
 
-1. `ToolSearch("+linear issue", max_results=5)` → get_issue, list_issues, list_issue_statuses, etc.
-2. `ToolSearch("+linear comment attachment", max_results=5)` → list_comments, create_comment, create_attachment
-3. `ToolSearch("+playwright navigate click screenshot take hover run_code", max_results=8)` → browser_navigate, browser_click, browser_take_screenshot, browser_hover, browser_run_code, etc.
-4. `ToolSearch("+playwright snapshot fill type select wait press resize", max_results=8)` → browser_snapshot, browser_fill_form, browser_type, browser_select_option, etc.
-5. `ToolSearch("+metabase-repro", max_results=5)` → start_metabase, stop_metabase, api_call, etc.
+If this returns "No such tool available" or any connection error, **STOP immediately** and tell the user: "Playwright MCP tools are not available. Please configure the Playwright MCP server in `.mcp.json` and restart before running /repro. Playwright is required for reproducing frontend issues."
 
-Do NOT make additional ToolSearch calls later in the workflow — all needed tools are loaded here.
+Do NOT continue with a code-analysis-only approach — Playwright is a hard requirement.
 
 ---
 
@@ -118,6 +119,8 @@ If an appdb type is detected (postgres, mysql, or mariadb), note it for Phase 3 
 
 **NOT blockers** (supported via Docker):
 - Postgres, MySQL, or MariaDB as the **application database** (appdb)
+
+> **Exception**: If the external system is only needed to create timing conditions (e.g., `pg_sleep` for simulating slow queries), the issue may still be investigable via code analysis. Note the limitation and proceed to Phase 4. The issue can be REPRODUCED via code analysis if the root cause is identifiable from source code without requiring runtime timing verification.
 
 Do not attempt to set up external data warehouses or other external systems. Skip directly to Phase 6 with status INCONCLUSIVE and note the required infrastructure.
 
@@ -259,6 +262,8 @@ Select strategy based on issue classification. Strategies can be combined within
 | Code logic / edge case | **REPL**: read source then invoke functions directly |
 | Checking if bug is fixed | Compare source + **REPL** to test both versions' behavior |
 
+> **H2 slow query limitation**: H2 does not have `pg_sleep()`. For timing-dependent issues requiring slow queries, skip browser reproduction of the timing aspect and use code analysis instead. Cross-joins (e.g., `SYSTEM_RANGE(1,N) a, SYSTEM_RANGE(1,N) b`) are impractical for controlled delays in H2.
+
 > **REPL-first approach**: Prefer the REPL over API calls for data setup and state inspection. The REPL is faster (no HTTP overhead), more expressive (full Clojure), and gives direct access to internals. Use API calls only when testing the HTTP layer specifically. Use Playwright only for visual/UI verification.
 
 > **Source worktree path**: The source code for the issue's version is at `./repro/<ISSUE-ID>/source/` (NOT `./repro/<ISSUE-ID>/`). The repro directory `./repro/<ISSUE-ID>/` contains H2 DB, logs, env file, and the `playwright/` screenshot directory — source is always in the `source/` subdirectory.
@@ -266,8 +271,6 @@ Select strategy based on issue classification. Strategies can be combined within
 > **Codebase guidance**: Both `./repro/<ISSUE-ID>/source/` and `./repro/master/` contain a `CLAUDE.md` file with detailed instructions for navigating the Metabase codebase — read it when exploring source code. It documents conventions, key directories, and patterns that will help you find what you need faster.
 
 ### Browser Automation (Playwright MCP)
-
-All Playwright tools were loaded in Phase 0 — do NOT run additional ToolSearch calls.
 
 After logging in, navigate directly to the target page — do NOT snapshot intermediate pages (home, browse) unless they're part of the reproduction. Use `browser_navigate` to go straight to the relevant URL.
 
