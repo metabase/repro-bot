@@ -5,7 +5,7 @@ Run `/repro <github-url-or-linear-id>` to investigate and reproduce a Metabase b
 ## Requirements
 - `gh` CLI authenticated (`gh auth status`)
 - Linear MCP tools available
-- Playwright MCP server configured in `.mcp.json` (REQUIRED — `/repro` will not proceed without it)
+- `playwright-cli` installed (`npm install -g @playwright/cli@latest`)
 - `metabase-repro` MCP server running (configured in `.mcp.json`)
 - `jq` installed (for JSON parsing)
 - Internet access to download Metabase JARs

@@ -4,7 +4,6 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
-import platform
 
 
 def check_setup() -> str:
@@ -50,24 +49,23 @@ def check_setup() -> str:
         else:
             messages.append("OK: docker is available")
 
-    # --- Playwright browsers ---
-    if platform.system() == "Darwin":
-        pw_cache = os.path.join(os.path.expanduser("~"), "Library", "Caches", "ms-playwright")
+    # --- Playwright CLI ---
+    if shutil.which("playwright-cli"):
+        messages.append("OK: playwright-cli is installed")
     else:
-        pw_cache = os.path.join(os.path.expanduser("~"), ".cache", "ms-playwright")
-
-    chromium_found = False
-    if os.path.isdir(pw_cache):
-        for entry in os.listdir(pw_cache):
-            if entry.startswith("chromium-"):
-                chromium_found = True
-                break
-
-    if chromium_found:
-        messages.append("OK: Playwright Chromium browser is installed")
-    else:
-        messages.append(f"MISSING: Playwright browsers not found in {pw_cache} (run 'npx playwright install chromium')")
-        ok = False
+        # Check if available via npx
+        npx_result = subprocess.run(
+            ["npx", "playwright-cli", "--version"],
+            capture_output=True, text=True, timeout=15,
+        )
+        if npx_result.returncode == 0:
+            messages.append("OK: playwright-cli is available via npx")
+        else:
+            messages.append(
+                "MISSING: playwright-cli is not installed "
+                "(run 'npm install -g @playwright/cli@latest && playwright-cli install --skills')"
+            )
+            ok = False
 
     # --- Result ---
     if not ok:
