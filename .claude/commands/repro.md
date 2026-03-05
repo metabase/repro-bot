@@ -16,7 +16,7 @@ Examples:
 
 > **Browser automation**: Use `playwright-cli` (installed as a Claude Code skill) for all browser automation. Run commands via the Bash tool (e.g. `playwright-cli goto https://...`). Do NOT use playwright-cli tools (`mcp__playwright__*`) — they are not configured. See the skill documentation at `.claude/skills/playwright-cli/SKILL.md` for the full command reference.
 
-> **Tooling assumption**: The Linear MCP tools (`mcp__plugin_productivity_linear__*`) are already connected and authenticated. Call them directly from the main agent — do NOT delegate Linear MCP calls to subagents (Task tool), as subagents cannot access MCP tools. Do not search for a Linear CLI, check for API keys, or verify authentication. If a Linear MCP call fails, report the error and move on.
+> **Tooling assumption**: The Linear MCP tools (`mcp__linear-server__*`) are already connected and authenticated. Call them directly from the main agent — do NOT delegate Linear MCP calls to subagents (Task tool), as subagents cannot access MCP tools. Do not search for a Linear CLI, check for API keys, or verify authentication. If a Linear MCP call fails, report the error and move on.
 
 > **Source exploration**: NEVER use Task/Explore agents for code analysis. Use direct Grep calls — they cost ~100 tokens vs 50K-100K for a subagent. Start with targeted Grep searches (specific component/function names). Multiple sequential Grep calls are always cheaper than a single Explore agent.
 
@@ -78,16 +78,16 @@ Determine input type and fetch issue data:
 ```bash
 gh issue view <ISSUE_NUM> --repo metabase/metabase --json number,title,body,labels,state
 ```
-Then search Linear for the linked issue via `mcp__plugin_productivity_linear__list_issues`.
+Then search Linear for the linked issue via `mcp__linear-server__list_issues`.
 
 **Linear ID** (matches `[A-Z]+-\d+`, e.g. `MB-1234`):
 ```
-mcp__plugin_productivity_linear__get_issue(id: "<LINEAR-ID>")
+mcp__linear-server__get_issue(id: "<LINEAR-ID>")
 ```
 Linear already syncs the full GitHub issue body — do NOT separately call `gh issue view`. Just extract the GitHub URL from the Linear issue description or attachments for use in the final report.
 
 **Cross-link resolution**:
-- If starting from GitHub: search Linear for a linked issue via `mcp__plugin_productivity_linear__list_issues` with a query matching the GitHub issue number or title keywords. Also check the GitHub issue body/comments for a Linear link.
+- If starting from GitHub: search Linear for a linked issue via `mcp__linear-server__list_issues` with a query matching the GitHub issue number or title keywords. Also check the GitHub issue body/comments for a Linear link.
 - If starting from Linear: extract the GitHub URL from the issue description or attachments. Do NOT fetch GitHub separately — Linear has all the content.
 
 Resolve both GitHub and Linear identifiers before proceeding.
@@ -98,7 +98,7 @@ Resolve both GitHub and Linear identifiers before proceeding.
 
 **Fetch all comments from Linear** (Linear mirrors GitHub comments, plus may have additional Linear-only comments):
 ```
-mcp__plugin_productivity_linear__list_comments(issueId: "<LINEAR-ID>")
+mcp__linear-server__list_comments(issueId: "<LINEAR-ID>")
 ```
 This is the primary source for all comment data — no need to separately fetch GitHub comments.
 
@@ -621,10 +621,10 @@ Choose one:
 
 ### Post to Linear
 
-> **IMPORTANT**: When creating the comment, set `createAsUser: "Claude Code"` and do NOT sync to GitHub. These are internal investigation comments and must stay Linear-only. If the Linear API supports a `doNotSyncToGithub` or similar flag, use it. Otherwise, prefix the comment body with `[internal]` to signal it should not be mirrored.
+> **IMPORTANT**: Do NOT sync to GitHub. These are internal investigation comments and must stay Linear-only. If the Linear API supports a `doNotSyncToGithub` or similar flag, use it. Otherwise, prefix the comment body with `[internal]` to signal it should not be mirrored.
 
 ```
-mcp__plugin_productivity_linear__create_comment(issueId: "<LINEAR-ID>", body: "<comment body>")
+mcp__linear-server__save_comment(issueId: "<LINEAR-ID>", body: "<comment body>")
 ```
 
 If a Playwright screenshot was captured, describe it in the comment body. Do NOT attempt to attach screenshots via `create_attachment` with base64 content — this is known to fail with "Invalid base64 content" errors and wastes turns.
@@ -633,7 +633,7 @@ If a Playwright screenshot was captured, describe it in the comment body. Do NOT
 
 If a test diff exists at `./repro/<ISSUE-ID>/test-diff.patch`, attach it to the Linear issue:
 ```
-mcp__plugin_productivity_linear__create_attachment(
+mcp__linear-server__create_attachment(
   issue: "<LINEAR-ID>",
   base64Content: "<base64-encoded contents of test-diff.patch>",
   filename: "<ISSUE-ID>-failing-test.patch",
