@@ -22,6 +22,12 @@ def check_setup() -> str:
     else:
         messages.append("OK: MB_PREMIUM_EMBEDDING_TOKEN is set")
 
+    if not os.environ.get("LINEAR_API_KEY"):
+        messages.append("MISSING: LINEAR_API_KEY is not set")
+        ok = False
+    else:
+        messages.append("OK: LINEAR_API_KEY is set")
+
     # --- CLI tools ---
     if not shutil.which("gh"):
         messages.append("MISSING: gh CLI is not installed")

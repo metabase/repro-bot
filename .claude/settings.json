@@ -30,7 +30,6 @@
       "Bash(cd *)",
       "Bash(clj-nrepl-eval *)",
       "Bash(curl *)",
-      "Bash(curl:*)",
       "Bash(echo *)",
       "Bash(find *)",
       "Bash(gh api repos/metabase/metabase/*)",
@@ -92,6 +91,7 @@
   },
   "enableAllProjectMcpServers": true,
   "enabledMcpjsonServers": [
-    "metabase-repro"
+    "metabase-repro",
+    "linear-server"
   ]
 }
