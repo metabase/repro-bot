@@ -3,12 +3,6 @@
     "metabase-repro": {
       "command": "uv",
       "args": ["run", "--directory", "mcp", "--with", "fastmcp", "python", "-m", "metabase_repro"]
-    },
-    "linear-server": {
-      "url": "https://mcp.linear.app/mcp",
-      "headers": {
-        "Authorization": "Bearer ${LINEAR_API_KEY}"
-      }
     }
   }
 }
