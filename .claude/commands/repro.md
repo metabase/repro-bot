@@ -102,6 +102,8 @@ mcp__linear-server__list_comments(issueId: "<LINEAR-ID>")
 ```
 This is the primary source for all comment data — no need to separately fetch GitHub comments.
 
+IMPORTANT: Do not consider anything from previous Repro-Bot Investigation comments.
+
 ---
 
 ## Phase 2: Issue Parsing
@@ -159,16 +161,16 @@ mcp__metabase-repro__setup_master_worktree()
 
 ### Determine Version
 
-`mage jar-download` (run from the master worktree) handles version resolution natively. Determine the version string to pass from the issue:
+Determine the VERSION string to pass from the issue:
 
-| Issue says | Pass to tools | What mage does |
+| Issue says | Pass to tools | What start_metabase does |
 |------------|-------------|----------------|
 | `v1.50.2` or `1.50.2` | `1.50.2` | Downloads EE v1.50.2 |
 | `v0.50.2` or `0.50.2` | `0.50.2` | Downloads OSS v0.50.2 |
 | `version 50` or just `50` | `50` | Queries GitHub releases for latest `1.50.x` EE |
 | No version mentioned | *latest stable* | Query `gh release list --repo metabase/metabase -L 5` to find the latest `v1.x.y` release, then use that version number (e.g. `1.52.3`). Do NOT use `master` — master builds cannot be downloaded via `mage jar-download`. |
 
-**Edition heuristic** (only needed when the issue says a bare version like "50"):
+**Edition heuristic** (only needed when the issue says a bare version like "50" or "v50"):
 - Default to **EE** (`1.x.y`) — `mage` does this automatically when given a bare number like `50`
 - Use **OSS** (`0.x.y`) only if the issue explicitly mentions "OSS" or "open source" or uses a `v0.x.y` version
 
