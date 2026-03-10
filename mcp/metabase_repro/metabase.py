@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 import time
+from datetime import datetime, timezone
 import urllib.error
 import urllib.request
 
@@ -129,10 +130,22 @@ def get_session_token(port: int, email: str = "crowberto@metabase.com",
     return None, last_error
 
 
+def _current_log_path(repro_dir: str) -> str:
+    """Return the path to the current (most recent) Metabase log file."""
+    log_file = read_state_file(repro_dir, "log-file")
+    if log_file:
+        return repro_path(repro_dir, log_file)
+    # Fallback: find the most recent metabase.*.log, or legacy metabase.log
+    logs = sorted(glob.glob(repro_path(repro_dir, "metabase.*.log")))
+    if logs:
+        return logs[-1]
+    return repro_path(repro_dir, "metabase.log")
+
+
 def _read_log_tail(repro_dir: str, n: int = 10) -> str:
     """Read the last n lines of the Metabase log file."""
     try:
-        with open(repro_path(repro_dir, "metabase.log")) as f:
+        with open(_current_log_path(repro_dir)) as f:
             lines = f.readlines()
             return "".join(lines[-n:])
     except Exception:
@@ -190,7 +203,10 @@ def start_metabase(repro_dir: str, version: str, port: int | None = None) -> str
 
     abs_repro = repro_path(repro_dir)
     abs_env = repro_path(repro_dir, "env.edn")
-    log_path = repro_path(repro_dir, "metabase.log")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    log_filename = f"metabase.{timestamp}.log"
+    log_path = repro_path(repro_dir, log_filename)
+    write_state_file(repro_dir, "log-file", log_filename)
 
     # Start via mage jar-download --run
     with open(log_path, "w") as log_file:
@@ -286,23 +302,40 @@ def start_metabase(repro_dir: str, version: str, port: int | None = None) -> str
 
 
 def stop_metabase(repro_dir: str) -> str:
-    """Kill Metabase process tree, remove source worktree, stop appdb."""
+    """Kill the Metabase process. Preserves DB, env, worktree, and appdb."""
+    pid_str = read_state_file(repro_dir, "metabase.pid")
+    if not pid_str:
+        return f"No running Metabase process found for {repro_dir}."
+    try:
+        pid = int(pid_str)
+        if is_pid_running(pid):
+            kill_tree(pid)
+            try:
+                os.remove(repro_path(repro_dir, "metabase.pid"))
+            except FileNotFoundError:
+                pass
+            return f"Stopped Metabase process (PID {pid}) for {repro_dir}. DB, env, and worktree preserved."
+        else:
+            try:
+                os.remove(repro_path(repro_dir, "metabase.pid"))
+            except FileNotFoundError:
+                pass
+            return f"Metabase process (PID {pid}) was not running. Cleaned up PID file."
+    except ValueError:
+        return f"ERROR: Invalid PID in state file: {pid_str}"
+
+
+def cleanup(repro_dir: str) -> str:
+    """Remove source worktree, stop appdb, and clear state for a repro directory.
+
+    Also stops Metabase if still running.
+    """
     actions = []
 
-    # Kill Metabase process
-    pid_str = read_state_file(repro_dir, "metabase.pid")
-    if pid_str:
-        try:
-            pid = int(pid_str)
-            if is_pid_running(pid):
-                kill_tree(pid)
-                actions.append(f"stopped Metabase (PID {pid})")
-        except ValueError:
-            pass
-        try:
-            os.remove(repro_path(repro_dir, "metabase.pid"))
-        except FileNotFoundError:
-            pass
+    # Stop Metabase process if still running
+    result = stop_metabase(repro_dir)
+    if "Stopped Metabase" in result:
+        actions.append(result.split(". ")[0])
 
     # Stop appdb
     container_name = read_state_file(repro_dir, "appdb-container.txt")
@@ -322,8 +355,8 @@ def stop_metabase(repro_dir: str) -> str:
     clear_state(repro_dir)
 
     if actions:
-        return f"Stopped {repro_dir}: {', '.join(actions)}."
-    return f"Stopped {repro_dir}: nothing was running."
+        return f"Cleaned up {repro_dir}: {', '.join(actions)}."
+    return f"Cleaned up {repro_dir}: nothing to clean."
 
 
 def reset_metabase(repro_dir: str) -> str:
@@ -348,12 +381,6 @@ def reset_metabase(repro_dir: str) -> str:
             os.remove(repro_path(repro_dir, f))
         except FileNotFoundError:
             pass
-
-    # Remove log
-    try:
-        os.remove(repro_path(repro_dir, "metabase.log"))
-    except FileNotFoundError:
-        pass
 
     # Remove stale state files
     for f in ["port", "session-token"]:

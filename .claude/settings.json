@@ -85,6 +85,7 @@
       "mcp__metabase-repro__start_metabase",
       "mcp__metabase-repro__stop_appdb_tool",
       "mcp__metabase-repro__stop_metabase",
+      "mcp__metabase-repro__cleanup",
       "mcp__linear-server__create_attachment",
       "mcp__linear-server__get_issue",
       "mcp__linear-server__list_comments",

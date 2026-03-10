@@ -121,6 +121,7 @@ Extract from **the issue body and all Linear comments** (which include synced Gi
 - **Frontend-heavy**: mentions specific UI elements, screenshots only, no API/SQL → primary strategy: Playwright
 - **Backend-heavy**: stack traces, SQL, query results, data correctness → primary strategy: REPL or API calls
 - **Mixed**: use both
+- **Upgrade/conversion**: bug occurs after upgrading between versions or switching between OSS and EE → version-switch strategy (see Phase 4)
 
 **Detect application database requirements**: Scan the issue body and comments for signs that the bug requires a non-H2 application database:
 - Phrases: "application database", "appdb", "app-db", "app db", "MB_DB_TYPE=postgres", "MB_DB_TYPE=mysql", "MB_DB_TYPE=mariadb"
@@ -284,6 +285,30 @@ Select strategy based on issue classification. Strategies can be combined within
 | Data model / metadata | **REPL**: `t2/select-one :model/Table` |
 | Code logic / edge case | **REPL**: read source then invoke functions directly |
 | Checking if bug is fixed | Compare source + **REPL** to test both versions' behavior |
+
+### Upgrade / Version-Switch Scenarios
+
+If the issue involves upgrading between versions or converting between OSS and EE, you can start and stop different versions of Metabase against the same database:
+
+1. **Start the initial version** normally via `start_metabase` — this creates the DB and sets up data
+2. **Set up state** — create questions, dashboards, or whatever data the issue requires on the initial version
+3. **Note the port** from `start_metabase` output — you'll reuse it
+4. **Stop the process** (preserves the database, env, and worktree):
+   ```
+   mcp__metabase-repro__stop_metabase(repro_dir="repro/<ISSUE-ID>")
+   ```
+5. **Start the new version** with the same port to reuse the existing DB:
+   ```
+   mcp__metabase-repro__start_metabase(repro_dir="repro/<ISSUE-ID>", version="<NEW-VERSION>", port=<SAME-PORT>)
+   ```
+6. Metabase will run migrations automatically on startup if upgrading to a newer version
+
+This works for:
+- Upgrading from an older version to a newer one (e.g., 1.50.2 → 1.52.3)
+- Downgrading (though Metabase may not support this cleanly)
+- Switching between OSS (0.x.y) and EE (1.x.y) editions
+
+You can repeat steps 3–5 to switch versions multiple times in a single investigation.
 
 > **H2 slow query limitation**: H2 does not have `pg_sleep()`. For timing-dependent issues requiring slow queries, skip browser reproduction of the timing aspect and use code analysis instead. Cross-joins (e.g., `SYSTEM_RANGE(1,N) a, SYSTEM_RANGE(1,N) b`) are impractical for controlled delays in H2.
 
@@ -615,10 +640,15 @@ Choose one:
 
 ### Attempts
 
+Include ALL attempts, even unsuccessful ones. This helps developers understand what was ruled out.
+
 | # | Approach | Hypothesis | Result |
 |---|----------|-----------|--------|
 | 1 | ... | ... | ... |
 | 2 | ... | ... | ... |
+
+### Approaches Not Tried
+<List any reproduction approaches that were considered but not attempted, with the reason why each was skipped (e.g., "Tried to use pg_sleep for timing but H2 doesn't support it", "Considered Cypress e2e test but the bug is purely backend"). Omit this section only if every considered approach was attempted.>
 
 ### Next Steps
 - <actionable item 1>
@@ -683,17 +713,17 @@ If no Linear issue was found or resolved:
 
 ## Phase 7: Cleanup
 
-Stop the Metabase instance and remove the worktree:
+Stop the Metabase instance and clean up resources:
 
 ```
-mcp__metabase-repro__stop_metabase(repro_dir="repro/<ISSUE-ID>")
+mcp__metabase-repro__cleanup(repro_dir="repro/<ISSUE-ID>")
 ```
 
-`stop_metabase` also removes the source worktree (`./repro/<ISSUE-ID>/source/`) to reclaim disk space, and stops any appdb Docker container that was started for this repro.
+`cleanup` stops the Metabase process (if still running), removes the source worktree (`./repro/<ISSUE-ID>/source/`) to reclaim disk space, stops any appdb Docker container, and clears state.
 
 The following are **intentionally left in place** for post-investigation inspection:
 - H2 DB: `./repro/<ISSUE-ID>/metabase.mv.db`
-- Server log: `./repro/<ISSUE-ID>/metabase.log`
+- Server logs: `./repro/<ISSUE-ID>/metabase.*.log`
 - Env file: `./repro/<ISSUE-ID>/env.edn`
 - Test diff (if generated): `./repro/<ISSUE-ID>/test-diff.patch`
 
@@ -771,3 +801,4 @@ Use **exactly** one of these categories per row (must match `/auto-improve` buck
 | Issue has no repro steps | Attempt reproduction based on title and description alone; note the absence of steps in report |
 | Prior auto-reproduce comment exists | Note the prior investigation in the report, proceed anyway with fresh investigation |
 | Version not found / download error | Try latest stable release as fallback (query `gh release list`); note the version fallback in the report. Do NOT use `master`. |
+| Upgrade / version-switch issue | Use `stop_metabase` to stop the process, then `start_metabase` with new version and same port. See Phase 4 "Upgrade / Version-Switch Scenarios". |

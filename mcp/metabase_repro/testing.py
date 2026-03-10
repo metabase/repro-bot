@@ -8,7 +8,8 @@ from .core import repro_path, run, read_state_file
 from .repl import repl_eval as _repl_eval_fn
 
 
-def run_test(repro_dir: str, test_file: str, port: int | None = None) -> str:
+def run_test(repro_dir: str, test_file: str, port: int | None = None,
+             source_dir: str | None = None) -> str:
     """Run a single test file against the source worktree.
 
     Detects test type from the file extension:
@@ -17,11 +18,13 @@ def run_test(repro_dir: str, test_file: str, port: int | None = None) -> str:
     - .cy.spec.ts(x) → Cypress acceptance test
 
     Args:
-        repro_dir: Path to repro directory
+        repro_dir: Path to repro directory (used for port/REPL state)
         test_file: Path relative to source root (e.g. test/metabase/foo_test.clj)
         port: Metabase HTTP port (required for Clojure and Cypress tests)
+        source_dir: Override source directory (default: <repro_dir>/source)
     """
-    source_dir = repro_path(repro_dir, "source")
+    if source_dir is None:
+        source_dir = repro_path(repro_dir, "source")
 
     if not os.path.isdir(source_dir):
         return f"ERROR: Source worktree not found at {source_dir}"

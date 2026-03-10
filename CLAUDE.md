@@ -28,6 +28,7 @@ Bare clone at `./git/metabase/` (no working tree). A persistent master worktree 
 - **MCP server base directory**: The `metabase-repro` MCP tools resolve `repro_dir` relative to their own project root (set in `.mcp.json`), NOT relative to the Claude Code CWD. Use absolute paths from tool output (e.g., `setup_worktree` returns the full worktree path). For Grep/Read, use the absolute path returned by the tool.
 - **H2 limitations**: H2 does NOT support `report-timezone`. Timezone-specific bugs cannot be reproduced with H2 — go directly to code analysis.
 - **H2 reserved keywords**: H2 reserves SQL keywords like `value`, `count`, `key`, `type` as column names/aliases — avoid them in native SQL test queries. Use `amount`, `qty`, `cnt` instead.
+- **H2 NULL constraints**: H2 may reject NULL insertions even after dropping NOT NULL constraints via `ALTER TABLE`. For NULL-related bugs, use a Postgres appdb instance.
 
 ## State Files (per repro directory)
 - `<REPRO_DIR>/port` — Metabase HTTP port
@@ -49,7 +50,8 @@ The `metabase-repro` MCP server (configured in `.mcp.json`, code at `mcp/metabas
 | `create_env` | Create env.edn configuration |
 | `jar_download` | Download Metabase JAR |
 | `start_metabase` | Full orchestration: download + env + start + setup + session |
-| `stop_metabase` | Kill process, remove worktree, stop appdb |
+| `stop_metabase` | Kill Metabase process (preserves DB, env, worktree) |
+| `cleanup` | Remove source worktree, stop appdb, clear state |
 | `reset_metabase` | Kill process, remove DB/logs, keep env/worktree |
 | `get_session_token` | Obtain/refresh admin session token |
 | `check_setup_token` | Check if instance needs initial setup |
