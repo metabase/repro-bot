@@ -208,7 +208,7 @@ def start_metabase(repro_dir: str, version: str, port: int | None = None) -> str
     # Wait for health check (up to 5 minutes)
     healthy = False
     for i in range(60):
-        if not is_pid_running(proc.pid):
+        if proc.poll() is not None:
             tail = _read_log_tail(repro_dir)
             return f"ERROR: Metabase process died.\nLast log lines:\n{tail}"
 
