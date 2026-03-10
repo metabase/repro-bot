@@ -289,7 +289,7 @@ Select strategy based on issue classification. Strategies can be combined within
 
 > **H2 reserved keywords**: H2 reserves `value`, `count`, `key`, `type` as SQL keywords — avoid using them as column aliases in native SQL test queries. Use `amount`, `qty`, `cnt`, etc. instead.
 
-> **playwright-cli single expressions**: Each `playwright-cli run-code` call must contain a single expression — no semicolons between statements. Use separate `run-code` calls, or chain with `&&` at the shell level.
+> **playwright-cli single expressions**: Each `playwright-cli run-code` call must contain a single expression — no semicolons between statements. Avoid async chaining with `.then()` — `run-code` only supports simple synchronous-looking expressions. For bounding box access or hover, use `playwright-cli hover <ref>` on known element refs instead. Use separate `run-code` calls, or chain with `&&` at the shell level.
 
 > **REPL-first approach**: Prefer the REPL over API calls for data setup and state inspection. The REPL is faster (no HTTP overhead), more expressive (full Clojure), and gives direct access to internals. Use API calls only when testing the HTTP layer specifically. Use Playwright only for visual/UI verification.
 
@@ -332,7 +332,9 @@ playwright-cli close
 
 **"Start exploring" modal**: Metabase shows a "Start exploring" modal when viewing a saved native question for the first time. Be prepared for an extra click to dismiss it — snapshot to find the button ref and click it.
 
-**Chart interaction**: Metabase charts use `[data-testid="visualization-root"]` as the container. To hover over chart elements, use `playwright-cli run-code` with Playwright page API calls to get bounding boxes and move the mouse. Use `page.waitForTimeout(ms)` (not `setTimeout`) for delays in run-code.
+**Chart interaction**: Metabase charts (ECharts) render into a canvas/img element. To trigger tooltips, use `playwright-cli hover <ref>` on the img element ref from a snapshot — do NOT use `run-code` with `page.mouse.move()`. The tooltip content will appear in the subsequent `snapshot` call DOM — check the bottom of the YAML for table elements.
+
+**Tooltip inspection via snapshot**: Tooltip content often appears at the bottom of the accessibility snapshot YAML as table elements, even if not visible in screenshots. Always check the full snapshot for tooltip table rows before attempting complex hover interactions.
 
 ### REPL Access (repl_eval MCP tool)
 
