@@ -26,9 +26,8 @@ Bare clone at `./git/metabase/` (no working tree). A persistent master worktree 
 - **NEVER use `clojure` CLI, `clojure -M`, or `clojure -X`. ALWAYS use the `repl_eval` MCP tool or the `mcp__metabase-repro__run_test` tool.** Starting a fresh JVM wastes 30-60 seconds per invocation.
 - **EE vs OSS tags**: The bare clone at `./git/metabase/` only has OSS tags (`v0.x.y`). EE tags (`v1.x.y`) do not exist. The `setup_worktree` tool auto-converts `v1.x.y` to `v0.x.y`. Both point to the same code.
 - **MCP server base directory**: The `metabase-repro` MCP tools resolve `repro_dir` relative to their own project root (set in `.mcp.json`), NOT relative to the Claude Code CWD. Use absolute paths from tool output (e.g., `setup_worktree` returns the full worktree path). For Grep/Read, use the absolute path returned by the tool.
-- **H2 limitations**: H2 does NOT support `report-timezone`. Timezone-specific bugs cannot be reproduced with H2 — go directly to code analysis.
-- **H2 reserved keywords**: H2 reserves SQL keywords like `value`, `count`, `key`, `type` as column names/aliases — avoid them in native SQL test queries. Use `amount`, `qty`, `cnt` instead.
-- **H2 NULL constraints**: H2 may reject NULL insertions even after dropping NOT NULL constraints via `ALTER TABLE`. For NULL-related bugs, use a Postgres appdb instance.
+- **Default appdb is Postgres**: The repro-bot defaults to Postgres for the application database.
+- **H2 limitations** (only relevant when H2 is explicitly chosen): H2 does NOT support `report-timezone`, reserves SQL keywords (`value`, `count`, `key`, `type`) as column names/aliases, and may reject NULL insertions even after dropping NOT NULL constraints via `ALTER TABLE`.
 
 ## State Files (per repro directory)
 - `<REPRO_DIR>/port` — Metabase HTTP port

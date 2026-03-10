@@ -1,11 +1,14 @@
 """Test running: execute Clojure, Jest, or Cypress tests against a source worktree."""
 from __future__ import annotations
 
+import logging
 import os
 import re
 
 from .core import repro_path, run, read_state_file
 from .repl import repl_eval as _repl_eval_fn
+
+logger = logging.getLogger(__name__)
 
 
 def run_test(repro_dir: str, test_file: str, port: int | None = None,
@@ -49,6 +52,28 @@ def run_test(repro_dir: str, test_file: str, port: int | None = None,
         return f"ERROR: Unknown test file type: {test_file}\nExpected: *.clj, *.cljc, *.unit.spec.{{ts,tsx}}, or *.cy.spec.{{ts,tsx}}"
 
 
+def _resolve_dev_classpath(source_dir: str) -> list[str]:
+    """Resolve :dev alias Maven dependency JARs from the source worktree.
+
+    Runs `clj -A:dev -Spath` and extracts .jar paths from the classpath output.
+    Returns an empty list on failure (clj not found, resolution error, etc.).
+    """
+    try:
+        result = run(["clj", "-A:dev", "-Spath"], cwd=source_dir, timeout=120)
+        if result.returncode != 0:
+            logger.warning("clj -A:dev -Spath failed: %s", result.stderr)
+            return []
+        classpath = result.stdout.strip()
+        jars = [p for p in classpath.split(":") if p.endswith(".jar")]
+        return jars
+    except FileNotFoundError:
+        logger.warning("clj not found — dev dependency JARs will not be added to classpath")
+        return []
+    except Exception as e:
+        logger.warning("Failed to resolve dev classpath: %s", e)
+        return []
+
+
 def _run_clojure_test(source_dir: str, test_file: str, port: int | None, repro_dir: str) -> str:
     """Run a Clojure test via the socket REPL."""
     if not port:
@@ -61,6 +86,16 @@ def _run_clojure_test(source_dir: str, test_file: str, port: int | None, repro_d
     ns = ns.replace("/", ".")
     ns = ns.replace("_", "-")
 
+    # Resolve dev dependency JARs from deps.edn :dev alias
+    dev_jars = _resolve_dev_classpath(source_dir)
+    if dev_jars:
+        jar_vector = " ".join(f'"{jar}"' for jar in dev_jars)
+        add_jars_code = f"""
+    (doseq [jar [{jar_vector}]]
+      (.addURL cl (io/as-url (io/file jar))))"""
+    else:
+        add_jars_code = ""
+
     clj_code = f"""
 (require '[clojure.java.io :as io])
 (let [cl (.getContextClassLoader (Thread/currentThread))
@@ -68,8 +103,8 @@ def _run_clojure_test(source_dir: str, test_file: str, port: int | None, repro_d
       dev-url  (io/as-url (io/file "{source_dir}/dev"))]
   (when-not (some #{{test-url}} (seq (.getURLs cl)))
     (.addURL cl test-url)
-    (.addURL cl dev-url)
-    (println "Added test/dev paths to classpath")))
+    (.addURL cl dev-url) {add_jars_code}
+    (println "Added test/dev paths + dev deps to classpath")))
 (require '{ns} :reload)
 (let [result (clojure.test/run-tests '{ns})]
   (when (pos? (+ (:fail result) (:error result)))

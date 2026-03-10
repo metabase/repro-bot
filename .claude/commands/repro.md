@@ -123,14 +123,14 @@ Extract from **the issue body and all Linear comments** (which include synced Gi
 - **Mixed**: use both
 - **Upgrade/conversion**: bug occurs after upgrading between versions or switching between OSS and EE → version-switch strategy (see Phase 4)
 
-**Detect application database requirements**: Scan the issue body and comments for signs that the bug requires a non-H2 application database:
-- Phrases: "application database", "appdb", "app-db", "app db", "MB_DB_TYPE=postgres", "MB_DB_TYPE=mysql", "MB_DB_TYPE=mariadb"
-- Stack traces with `org.postgresql` or `com.mysql` or `org.mariadb` errors in Metabase system tables (e.g. `core_user`, `report_card`, `metabase_database` — NOT data warehouse tables)
-- Explicit mentions of running Metabase with Postgres/MySQL/MariaDB as the backing store
+**Detect application database requirements**: The default appdb is **Postgres** — it is what most people use and doesn't have limitations that H2 does. Scan the issue body and comments for explicit overrides:
 
-**Important**: Distinguish **application database** (where Metabase stores its own metadata) from **data warehouse** (databases users connect to query their data). Only appdb mentions trigger Docker-based database setup. Data warehouse requirements remain blockers (see below).
+- **Use H2 only if**: the issue explicitly mentions H2 (e.g., "H2 database", "using H2", "MB_DB_TYPE=h2", "embedded database", "default database")
+- **Use MySQL/MariaDB only if**: the issue explicitly mentions MySQL or MariaDB as the application database (e.g., "MB_DB_TYPE=mysql", "MB_DB_TYPE=mariadb", "appdb is MySQL")
 
-If an appdb type is detected (postgres, mysql, or mariadb), note it for Phase 3 — Docker will be used to provide it.
+**Important**: Distinguish **application database** (where Metabase stores its own metadata) from **data warehouse** (databases users connect to query their data). Only appdb mentions trigger a change from the Postgres default. Data warehouse requirements remain blockers (see below).
+
+Note the appdb type (postgres, h2, mysql, or mariadb) for Phase 3.
 
 **Check for external system dependencies**: If the issue requires infrastructure beyond a local Metabase instance, **stop before attempting reproduction**. Post an INCONCLUSIVE report explaining what external systems are needed. Examples of blockers:
 - Remote databases (Postgres, MySQL, BigQuery, Redshift, Snowflake, etc.) as the **data warehouse**
@@ -189,21 +189,22 @@ For `version_ref`, use the git tag matching the version (e.g. `v1.50.2`). If no 
 
 > **Tag resolution**: `setup_worktree` auto-normalizes EE tags (`v1.x.y` → `v0.x.y`) and fetches missing tags automatically. No manual git fetch needed.
 
-### Start Application Database (if needed)
+### Start Application Database
 
-**If an appdb type was detected in Phase 2** (postgres, mysql, or mariadb):
+**Default (Postgres)** — unless a different appdb was explicitly requested in Phase 2:
 
 ```
-mcp__metabase-repro__start_appdb(repro_dir="repro/<ISSUE-ID>", db_type="<DB_TYPE>")
+mcp__metabase-repro__start_appdb(repro_dir="repro/<ISSUE-ID>", db_type="postgres")
 ```
 
 Then create the env file:
 ```
-mcp__metabase-repro__create_env(repro_dir="repro/<ISSUE-ID>", db_type="<DB_TYPE>")
+mcp__metabase-repro__create_env(repro_dir="repro/<ISSUE-ID>", db_type="postgres")
 ```
-The appdb port is read from state files automatically.
 
-**If no appdb requirement was detected** (default H2), the env file is created automatically by `start_metabase`.
+**If MySQL/MariaDB was explicitly requested**: Call `start_appdb` and `create_env` with the appropriate `db_type` (`mysql` or `mariadb`).
+
+**If H2 was explicitly requested**: Skip `start_appdb` — the env file is created automatically by `start_metabase`.
 
 ### Start Metabase
 
@@ -671,13 +672,24 @@ Apply a label based on the reproduction outcome:
 
 | Status | Label |
 |--------|-------|
-| REPRODUCED | `auto-repro-success` |
-| NOT REPRODUCED | `auto-repro-failed` |
-| INCONCLUSIVE | `auto-repro-inconclusive` |
+| REPRODUCED | `.Auto Repro Success` |
+| NOT REPRODUCED | `.Auto Repro Failed` |
+| INCONCLUSIVE | `.Auto Repro Inconclusive` |
+
+Retrieve the issue's current labels from the Phase 1 data (the `labels` array in the
+`get_issue`/`list_issues` response). Add the appropriate repro label to that list, then pass
+all labels together:
 
 ```
-mcp__linear-server__save_issue(id: "<LINEAR-ID>", labels: ["<label>"])
+mcp__linear-server__save_issue(id: "<LINEAR-ID>", labels: ["<existing-label-1>", "<existing-label-2>", ..., "<repro-label>"])
 ```
+
+**IMPORTANT**: The `labels` parameter REPLACES all labels — it is not additive. Always include
+the issue's existing labels to avoid wiping them.
+
+**IMPORTANT**: Only add the exact labels listed in the table above (`.Auto Repro Success`,
+`.Auto Repro Failed`, `.Auto Repro Inconclusive`). Do NOT add any other labels such as
+`.Reproduced`, `.Not Reproduced`, etc.
 
 If a Playwright screenshot was captured, describe it in the comment body. Do NOT attempt to attach screenshots via `create_attachment` with base64 content — this is known to fail with "Invalid base64 content" errors and wastes turns.
 
@@ -797,7 +809,7 @@ Use **exactly** one of these categories per row (must match `/auto-improve` buck
 | Metabase fails to start within 5 minutes | Report the last 30 lines of `metabase.log`, stop investigation |
 | Metabase needs a clean restart | Use `mcp__metabase-repro__reset_metabase(repro_dir="repro/<ISSUE-ID>")` then `start_metabase` again |
 | Frontend-only issue (no API/SQL) | Use playwright-cli; mark INCONCLUSIVE only if Playwright is unavailable |
-| Driver-specific issue (Postgres, MySQL) | Note that H2 was used; mark INCONCLUSIVE with a note about environment requirements |
+| Driver-specific issue (MySQL, etc.) | Note which appdb was used; mark INCONCLUSIVE with a note about environment requirements if the required driver isn't available |
 | Issue has no repro steps | Attempt reproduction based on title and description alone; note the absence of steps in report |
 | Prior auto-reproduce comment exists | Note the prior investigation in the report, proceed anyway with fresh investigation |
 | Version not found / download error | Try latest stable release as fallback (query `gh release list`); note the version fallback in the report. Do NOT use `master`. |
