@@ -287,6 +287,10 @@ Select strategy based on issue classification. Strategies can be combined within
 
 > **H2 slow query limitation**: H2 does not have `pg_sleep()`. For timing-dependent issues requiring slow queries, skip browser reproduction of the timing aspect and use code analysis instead. Cross-joins (e.g., `SYSTEM_RANGE(1,N) a, SYSTEM_RANGE(1,N) b`) are impractical for controlled delays in H2.
 
+> **H2 reserved keywords**: H2 reserves `value`, `count`, `key`, `type` as SQL keywords — avoid using them as column aliases in native SQL test queries. Use `amount`, `qty`, `cnt`, etc. instead.
+
+> **playwright-cli single expressions**: Each `playwright-cli run-code` call must contain a single expression — no semicolons between statements. Use separate `run-code` calls, or chain with `&&` at the shell level.
+
 > **REPL-first approach**: Prefer the REPL over API calls for data setup and state inspection. The REPL is faster (no HTTP overhead), more expressive (full Clojure), and gives direct access to internals. Use API calls only when testing the HTTP layer specifically. Use Playwright only for visual/UI verification.
 
 > **Source worktree path**: The source code for the issue's version is at `./repro/<ISSUE-ID>/source/` (NOT `./repro/<ISSUE-ID>/`). The repro directory `./repro/<ISSUE-ID>/` contains H2 DB, logs, env file, and the `playwright/` screenshot directory — source is always in the `source/` subdirectory.
@@ -627,6 +631,20 @@ Choose one:
 
 ```
 mcp__linear-server__save_comment(issueId: "<LINEAR-ID>", body: "<comment body>")
+```
+
+### Label the Issue
+
+Apply a label based on the reproduction outcome:
+
+| Status | Label |
+|--------|-------|
+| REPRODUCED | `auto-repro-success` |
+| NOT REPRODUCED | `auto-repro-failed` |
+| INCONCLUSIVE | `auto-repro-inconclusive` |
+
+```
+mcp__linear-server__save_issue(id: "<LINEAR-ID>", labels: ["<label>"])
 ```
 
 If a Playwright screenshot was captured, describe it in the comment body. Do NOT attempt to attach screenshots via `create_attachment` with base64 content — this is known to fail with "Invalid base64 content" errors and wastes turns.

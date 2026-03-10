@@ -27,6 +27,7 @@ Bare clone at `./git/metabase/` (no working tree). A persistent master worktree 
 - **EE vs OSS tags**: The bare clone at `./git/metabase/` only has OSS tags (`v0.x.y`). EE tags (`v1.x.y`) do not exist. The `setup_worktree` tool auto-converts `v1.x.y` to `v0.x.y`. Both point to the same code.
 - **MCP server base directory**: The `metabase-repro` MCP tools resolve `repro_dir` relative to their own project root (set in `.mcp.json`), NOT relative to the Claude Code CWD. Use absolute paths from tool output (e.g., `setup_worktree` returns the full worktree path). For Grep/Read, use the absolute path returned by the tool.
 - **H2 limitations**: H2 does NOT support `report-timezone`. Timezone-specific bugs cannot be reproduced with H2 — go directly to code analysis.
+- **H2 reserved keywords**: H2 reserves SQL keywords like `value`, `count`, `key`, `type` as column names/aliases — avoid them in native SQL test queries. Use `amount`, `qty`, `cnt` instead.
 
 ## State Files (per repro directory)
 - `<REPRO_DIR>/port` — Metabase HTTP port
