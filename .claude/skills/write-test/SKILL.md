@@ -86,3 +86,7 @@ Saves all changes (including new untracked files) to `./repro/<ISSUE-ID>/test-di
 - **Large enterprise tests**: If `run_test` times out on a large file in `enterprise/backend/test/`, write a minimal inline REPL snippet instead.
 - **Node version errors in CI**: Do NOT attempt manual yarn/jest/cypress. Document as "verified by code review, could not execute in CI due to Node version mismatch".
 - **Jest/Cypress tooling failures**: Save the test patch — it's valid evidence even without execution. Note the tooling error in the report.
+- **`run_test` returns nil**: Ensure `setup_worktree` was called before `start_metabase`.
+  If Metabase was started first, restart it to pick up test paths.
+- **Test namespaces unavailable**: Restart Metabase after `setup_worktree`.
+- **Dynamic column aliases**: For tests involving `lib/desired-column-alias`, retrieve the alias dynamically from `lib/returned-columns` rather than hardcoding. Aliases differ by metadata provider.

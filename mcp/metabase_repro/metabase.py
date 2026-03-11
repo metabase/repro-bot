@@ -4,6 +4,7 @@ from __future__ import annotations
 import glob
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -158,6 +159,36 @@ def check_setup_token(port: int) -> str:
     return token or ""
 
 
+def _parse_env_edn(path: str) -> dict[str, str]:
+    """Parse an env.edn file into environment variables.
+
+    Converts keys like :mb-db-type to MB_DB_TYPE.
+    """
+    env_vars = {}
+    try:
+        with open(path) as f:
+            content = f.read()
+        for m in re.finditer(r':(\S+)\s+"([^"]*)"', content):
+            key = m.group(1).upper().replace("-", "_")
+            env_vars[key] = m.group(2)
+    except FileNotFoundError:
+        pass
+    return env_vars
+
+
+def _start_nrepl(repro_dir: str, nrepl_port: int) -> str | None:
+    """Start an nREPL server inside the running Metabase via socket REPL.
+
+    Returns error message or None on success.
+    """
+    from .repl import _socket_repl_eval
+    code = f"(require 'nrepl.server) (nrepl.server/start-server :port {nrepl_port})"
+    result = _socket_repl_eval(repro_dir, code, timeout=30)
+    if result.startswith("ERROR"):
+        return result
+    return None
+
+
 def start_metabase(repro_dir: str, version: str, port: int | None = None) -> str:
     """Start a Metabase instance. Handles JAR download, env creation, startup, and setup.
 
@@ -201,21 +232,51 @@ def start_metabase(repro_dir: str, version: str, port: int | None = None) -> str
     if not jars:
         return "ERROR: No JAR found in downloads/."
 
-    abs_repro = repro_path(repro_dir)
+    # Require source worktree for clj-based startup
+    source_dir = repro_path(repro_dir, "source")
+    if not os.path.isdir(source_dir):
+        return "ERROR: Source worktree not found. Run setup_worktree before start_metabase."
+
     abs_env = repro_path(repro_dir, "env.edn")
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     log_filename = f"metabase.{timestamp}.log"
     log_path = repro_path(repro_dir, log_filename)
     write_state_file(repro_dir, "log-file", log_filename)
 
-    # Start via mage jar-download --run
+    jar_path = jars[0]
+    repl_port = port + 3000
+    nrepl_port = port + 4000
+
+    # Build env vars from env.edn
+    env = os.environ.copy()
+    env.update(_parse_env_edn(abs_env))
+    env["MB_JETTY_PORT"] = str(port)
+
+    # EE config file for auto-setup
+    config_file = os.path.join(PROJECT_ROOT, "repro", "master", "mage", "jar_download_config.yml")
+    if os.path.exists(config_file):
+        env["MB_CONFIG_FILE_PATH"] = config_file
+
+    # Use clj with JAR on classpath + :dev:ee:ee-dev for test/dev deps
+    sdeps = json.dumps({
+        "paths": [],
+        "deps": {"metabase/jar": {"local/root": jar_path}}
+    })
+    cmd = [
+        "clj",
+        "-Sdeps", sdeps,
+        "-A:dev:ee:ee-dev",
+        f"-J-Dclojure.server.repl={{:port {repl_port} :accept clojure.core.server/repl}}",
+        "-M", "-m", "metabase.core",
+    ]
+
     with open(log_path, "w") as log_file:
         proc = subprocess.Popen(
-            [os.path.join(master_dir, "bin", "mage"), "jar-download", version, downloads_dir,
-             "--run", "--port", str(port), "-e", abs_env],
+            cmd,
             stdout=log_file,
             stderr=subprocess.STDOUT,
-            cwd=master_dir,
+            cwd=source_dir,
+            env=env,
         )
 
     write_state_file(repro_dir, "metabase.pid", str(proc.pid))
@@ -282,6 +343,14 @@ def start_metabase(repro_dir: str, version: str, port: int | None = None) -> str
     else:
         setup_error = f"Could not obtain session token: {session_err}"
 
+    # Start nREPL server inside the running Metabase
+    nrepl_error = _start_nrepl(repro_dir, nrepl_port)
+    if nrepl_error:
+        nrepl_status = f"nREPL failed: {nrepl_error}"
+    else:
+        write_state_file(repro_dir, "nrepl-port", str(nrepl_port))
+        nrepl_status = f"nREPL on port {nrepl_port}"
+
     load_state(repro_dir)
 
     # Return only the summary block
@@ -289,6 +358,7 @@ def start_metabase(repro_dir: str, version: str, port: int | None = None) -> str
         f"=== Metabase Ready ===",
         f"Edition:     {edition}",
         f"Port:        {port}",
+        f"REPL:        socket={repl_port}, {nrepl_status}",
         f"Credentials: crowberto@metabase.com / {password}",
         f"URL:         http://localhost:{port}",
     ]
@@ -383,7 +453,7 @@ def reset_metabase(repro_dir: str) -> str:
             pass
 
     # Remove stale state files
-    for f in ["port", "session-token"]:
+    for f in ["port", "session-token", "nrepl-port"]:
         try:
             os.remove(repro_path(repro_dir, f))
         except FileNotFoundError:

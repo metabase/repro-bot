@@ -1,13 +1,33 @@
-"""Socket REPL client for evaluating Clojure code against a running Metabase instance."""
+"""REPL client for evaluating Clojure code against a running Metabase instance.
+
+Primary: nREPL via clj-nrepl-eval subprocess.
+Fallback: socket REPL client (used before nREPL is started).
+"""
 from __future__ import annotations
 
 import socket
 import time
 
-from .core import read_state_file, truncate_output
+from .core import read_state_file, run, truncate_output
 
 
 def repl_eval(repro_dir: str, code: str, timeout: int = 30) -> str:
+    """Evaluate Clojure code via nREPL (preferred) or socket REPL (fallback)."""
+    nrepl_port = read_state_file(repro_dir, "nrepl-port")
+    if nrepl_port:
+        result = run(
+            ["clj-nrepl-eval", "--port", nrepl_port, code],
+            timeout=timeout + 5,
+        )
+        if result.returncode != 0:
+            return f"ERROR: {result.stderr.strip()}"
+        return truncate_output(result.stdout.strip())
+
+    # Fallback to socket REPL
+    return _socket_repl_eval(repro_dir, code, timeout)
+
+
+def _socket_repl_eval(repro_dir: str, code: str, timeout: int = 30) -> str:
     """Send Clojure code to the socket REPL and return the result."""
     port_str = read_state_file(repro_dir, "port")
     if not port_str:

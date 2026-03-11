@@ -19,13 +19,14 @@ Examples:
 - **Browser**: `playwright-cli` via Bash. Never `mcp__playwright__*`. See `.claude/skills/playwright-cli/SKILL.md`.
 - **Linear**: Call `mcp__linear-server__*` tools directly, not via subagents (subagents can't access MCP tools).
 - **No web search**: Never use WebSearch/WebFetch for issue details. All data from `gh` CLI or Linear MCP.
-- **File reads**: Read whole files or large 500+ line chunks — never scan in 60-line windows.
+- **File reads**: Read whole files or large 500+ line chunks — never scan in 60-line windows. Anti-pattern: reading the same file 5+ times with small offsets. Read the whole file once.
 - **File searches**: Never search outside `./repro/`. Never `find /` or search the home directory.
 - **Git commands**: Use `git -C <path>` instead of `cd <path> && git ...`.
-- **Parallelism**: ALWAYS batch independent tool calls in the same turn. Saves 30%+ on turns.
+- **Parallelism**: ALWAYS batch independent tool calls in the same turn. Saves 30%+ on turns. Common parallel batches: multiple Grep calls, `git log` + `git show`, independent `repl_eval` calls, `setup_worktree` + `start_appdb`.
+- **No `wait-for-selector`**: `playwright-cli` does NOT have a `wait-for-selector` command. Use `snapshot` + `click` instead.
 - **Time budget**: ~25 min total. Prioritize reproduction over exploration.
 
-> **MCP tool schemas**: At the **start of the run**, pre-fetch all MCP tool schemas in a single `ToolSearch` call: `select:mcp__metabase-repro__check_setup,mcp__metabase-repro__setup_master_worktree,mcp__metabase-repro__setup_worktree,mcp__metabase-repro__start_appdb,mcp__metabase-repro__start_metabase,mcp__metabase-repro__stop_metabase,mcp__metabase-repro__api_call,mcp__metabase-repro__get_session_token,mcp__metabase-repro__repl_eval,mcp__metabase-repro__run_test,mcp__metabase-repro__save_test_patch,mcp__metabase-repro__cleanup,mcp__metabase-repro__get_status,mcp__linear-server__list_issues,mcp__linear-server__list_comments,mcp__linear-server__get_issue,mcp__linear-server__save_comment,mcp__linear-server__save_issue,mcp__linear-server__list_issue_labels,mcp__linear-server__create_attachment`. Do NOT fetch schemas one-at-a-time.
+> **MCP tool schemas**: At the **start of the run**, pre-fetch all MCP tool schemas in a single `ToolSearch` call: `select:mcp__metabase-repro__check_setup,mcp__metabase-repro__setup_master_worktree,mcp__metabase-repro__setup_worktree,mcp__metabase-repro__start_appdb,mcp__metabase-repro__start_metabase,mcp__metabase-repro__stop_metabase,mcp__metabase-repro__api_call,mcp__metabase-repro__get_session_token,mcp__metabase-repro__repl_eval,mcp__metabase-repro__run_test,mcp__metabase-repro__save_test_patch,mcp__metabase-repro__cleanup,mcp__metabase-repro__get_status,mcp__metabase-repro__browser_snapshot,mcp__linear-server__list_issues,mcp__linear-server__list_comments,mcp__linear-server__get_issue,mcp__linear-server__save_comment,mcp__linear-server__save_issue,mcp__linear-server__list_issue_labels,mcp__linear-server__create_attachment`. Do NOT fetch schemas one-at-a-time.
 
 > **CI mode**: When `GITHUB_ACTIONS_RUN_URL` is set, this runs in GitHub Actions CI. On catastrophic failure (MCP errors, startup failures, unrecoverable errors), post to Linear before stopping:
 > ```markdown
@@ -143,11 +144,14 @@ mcp__metabase-repro__create_env(repro_dir="repro/<ISSUE-ID>", db_type="postgres"
 
 ### Start Metabase
 
+> **IMPORTANT**: `setup_worktree` MUST complete before `start_metabase` so test/dev
+> namespaces are on the classpath. Do NOT parallelize these two calls.
+
 ```
 mcp__metabase-repro__start_metabase(repro_dir="repro/<ISSUE-ID>", version="<VERSION>")
 ```
 
-Output includes: edition, port, credentials, session token. Never use `java -jar` directly.
+Output includes: edition, port, credentials, session token, nREPL port. Never use `java -jar` directly.
 
 ### Verify REPL
 ```
@@ -177,12 +181,16 @@ Invoke the `metabase-reference` skill for REPL recipes, API patterns, domain qui
 |------------|-----------------|
 | UI / frontend behavior | **playwright-cli** + **REPL** for data setup |
 | Setup steps in issue | **REPL** for data setup, **Playwright** for UI verification |
-| API / endpoint behavior | **REPL** (invoke handlers directly) or MCP `api_call` |
+| API / endpoint behavior | **REPL** (invoke handlers directly) or MCP `api_call` (note: `path` should NOT include `/api/` — it's prepended automatically, e.g. `path="/collection/root"`) |
 | Query results / SQL generation | **REPL**: `qp/process-query` or `qp.compile/compile` |
 | Wrong data / DB state | **REPL**: `t2/select` to inspect |
 | Permissions / auth flows | **REPL** + **Playwright** |
 | Code logic / edge case | **REPL**: read source then invoke functions |
 | Checking if fixed | Compare source + **REPL** to test both versions |
+
+> **Backend bugs**: For backend-classified bugs, limit Playwright to 1-2 screenshots for evidence. Do NOT iterate on UI reproduction if REPL already confirmed the bug.
+
+> **Timing / race-condition bugs**: If reproduction requires simulating slow API responses or race conditions that can't be triggered locally, proceed with code analysis. Note in report that root cause is confirmed via code review but not empirically observable in a single-instance environment.
 
 > **Time-series bugs**: Test at multiple data densities: ~12 points (monthly/1yr), ~36 (monthly/3yr), ~60 (monthly/5yr). Bug often manifests at specific density where ECharts switches interval logic.
 
@@ -198,8 +206,7 @@ Invoke the `metabase-reference` skill for REPL recipes, API patterns, domain qui
 **Token reduction rules**:
 - Create questions/dashboards/data via API or REPL — NEVER use Playwright for creation UIs
 - Navigate directly to `/question/<ID>` or `/dashboard/<ID>`
-- **Snapshot only for interaction or proof**: Use `screenshot` for visual checks (fixed cost). Only `snapshot` when you need element refs or DOM state proof. NEVER snapshot pivot tables, large data views, or home page.
-- When reading snapshot YAML, use Read with `offset`/`limit`
+- **Snapshot via MCP tool**: Use `mcp__metabase-repro__browser_snapshot(repro_dir="repro/<ISSUE-ID>", name="descriptive-name")` instead of `playwright-cli snapshot` via Bash. The MCP tool saves full YAML to file and returns only a compact summary with interactive element refs — keeping large YAML out of context. Use `Read` on the saved YAML file when you need full page structure. NEVER use `playwright-cli snapshot` directly via Bash. NEVER snapshot pivot tables, large data views, or home page.
 - NEVER use `&` (background) with playwright-cli
 
 **Login and navigate** (use port from `start_metabase`):
@@ -220,6 +227,8 @@ Get session token from `get_session_token` or read `./repro/<ISSUE-ID>/session-t
 
 > **playwright-cli resize**: Use `playwright-cli resize <w> <h>`, not `run-code` with `page.setViewportSize()`.
 
+> **playwright-cli network**: `network` accumulates ALL requests since page load, not just recent ones. Output grows over time.
+
 ### REPL Access (repl_eval MCP tool)
 
 The REPL is the **primary investigation tool**. After a timeout, skip arithmetic pings — just send your next command.
@@ -230,7 +239,7 @@ mcp__metabase-repro__repl_eval(repro_dir="repro/<ISSUE-ID>", code="(require '[to
 
 **REPL expression rules**: Send one expression per `repl_eval` call. Multi-expression evals frequently timeout. Split into separate (parallel if independent) calls.
 
-The JAR runs production namespaces only. Available: `toucan2.core` (`t2`), `metabase.query-processor` (`qp`), `metabase.query-processor.compile` (`qp.compile`). Test/dev namespaces need manual classpath setup (see `metabase-reference` skill).
+Test/dev namespaces (`metabase.test`, `dev`, enterprise test namespaces) are available natively on the classpath — no manual setup needed.
 
 > **REPL-first**: Prefer REPL over API calls for data setup and state inspection. Use API only when testing the HTTP layer.
 
@@ -331,7 +340,7 @@ mcp__linear-server__save_comment(issueId: "<LINEAR-ID>", body: "<comment body>")
 | NOT REPRODUCED | `.Auto Repro Failed` |
 | INCONCLUSIVE | `.Auto Repro Inconclusive` |
 
-The `labels` parameter REPLACES all labels — always include existing labels. Only use the exact labels above.
+The `labels` parameter REPLACES all labels — always include existing labels. Use the **exact full label names** above (e.g. `.Auto Repro Success`, NOT `.Auto Repro`). Fetch labels once with `list_issue_labels` using the full name — do NOT retry with partial names or variations if denied.
 
 If a Playwright screenshot was captured, describe it in the comment. Do NOT attach via `create_attachment` with base64 (known to fail).
 

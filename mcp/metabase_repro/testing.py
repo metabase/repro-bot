@@ -2,14 +2,11 @@
 from __future__ import annotations
 
 import json
-import logging
 import os
 import re
 
 from .core import repro_path, run, read_state_file, truncate_output
 from .repl import repl_eval as _repl_eval_fn
-
-logger = logging.getLogger(__name__)
 
 
 def _detect_pkg_manager(source_dir: str) -> str:
@@ -77,53 +74,18 @@ def run_test(repro_dir: str, test_file: str, port: int | None = None,
         return f"ERROR: Unknown test file type: {test_file}\nExpected: *.clj, *.cljc, *.unit.spec.{{ts,tsx}}, or *.cy.spec.{{ts,tsx}}"
 
 
-def _resolve_dev_classpath(source_dir: str) -> list[str]:
-    """Resolve :dev alias Maven dependency JARs from the source worktree.
-
-    Checks for a cached .dev-classpath file first (written by setup_worktree),
-    then falls back to running `clj -A:dev -Spath`.
-    Returns an empty list on failure (clj not found, resolution error, etc.).
-    """
-    # Check for cached classpath from setup_worktree
-    cache_file = os.path.join(source_dir, ".dev-classpath")
-    if os.path.exists(cache_file):
-        with open(cache_file) as f:
-            jars = [line.strip() for line in f if line.strip()]
-        if jars:
-            logger.info("Using cached dev classpath (%d JARs)", len(jars))
-            return jars
-
-    # Fall back to resolving (longer timeout for fresh downloads)
-    try:
-        result = run(["clj", "-A:dev", "-Spath"], cwd=source_dir, timeout=300)
-        if result.returncode != 0:
-            logger.warning("clj -A:dev -Spath failed: %s", result.stderr)
-            return []
-        classpath = result.stdout.strip()
-        jars = [p for p in classpath.split(":") if p.endswith(".jar")]
-        # Cache for next time
-        with open(cache_file, "w") as f:
-            f.write("\n".join(jars))
-        return jars
-    except FileNotFoundError:
-        logger.warning("clj not found — dev dependency JARs will not be added to classpath")
-        return []
-    except Exception as e:
-        logger.warning("Failed to resolve dev classpath: %s", e)
-        return []
-
-
 def _run_clojure_test(source_dir: str, test_file: str, port: int | None, repro_dir: str) -> str:
-    """Run a Clojure test via the socket REPL."""
-    if not port:
-        return "ERROR: Clojure tests require a running Metabase instance (need port for socket REPL)"
+    """Run a Clojure test via the REPL.
 
-    # Detect enterprise test path
-    is_enterprise = test_file.startswith("enterprise/")
+    Test/dev namespaces are already on the classpath when Metabase is started
+    via clj with :dev:ee:ee-dev aliases — no .addURL manipulation needed.
+    """
+    if not port:
+        return "ERROR: Clojure tests require a running Metabase instance"
 
     # Derive namespace from test file path
     ns = test_file
-    if is_enterprise:
+    if test_file.startswith("enterprise/"):
         ns = re.sub(r"^enterprise/backend/test/", "", ns)
     else:
         ns = re.sub(r"^test/", "", ns)
@@ -131,37 +93,7 @@ def _run_clojure_test(source_dir: str, test_file: str, port: int | None, repro_d
     ns = ns.replace("/", ".")
     ns = ns.replace("_", "-")
 
-    # Build list of classpath directories to add
-    cp_dirs = [f"{source_dir}/test", f"{source_dir}/dev"]
-    if is_enterprise:
-        cp_dirs.extend([
-            f"{source_dir}/enterprise/backend/test",
-            f"{source_dir}/enterprise/backend/src",
-        ])
-
-    # Resolve dev dependency JARs from deps.edn :dev alias
-    dev_jars = _resolve_dev_classpath(source_dir)
-    if dev_jars:
-        jar_vector = " ".join(f'"{jar}"' for jar in dev_jars)
-        add_jars_code = f"""
-    (doseq [jar [{jar_vector}]]
-      (.addURL cl (io/as-url (io/file jar))))"""
-    else:
-        add_jars_code = ""
-
-    # Build addURL calls for all classpath dirs
-    cp_urls = "\n".join(
-        f'      (let [u (io/as-url (io/file "{d}"))] (.addURL cl u))'
-        for d in cp_dirs
-    )
-
     clj_code = f"""
-(require '[clojure.java.io :as io])
-(let [cl (.getContextClassLoader (Thread/currentThread))
-      test-url (io/as-url (io/file "{source_dir}/test"))]
-  (when-not (some #{{test-url}} (seq (.getURLs cl)))
-{cp_urls} {add_jars_code}
-    (println "Added classpath entries:" (mapv str (.getURLs cl)))))
 (require '{ns} :reload)
 (let [result (clojure.test/run-tests '{ns})]
   (when (pos? (+ (:fail result) (:error result)))

@@ -19,6 +19,7 @@ from . import git
 from . import preflight
 from . import repl
 from . import testing
+from . import browser
 
 mcp = FastMCP("metabase-repro")
 
@@ -165,10 +166,18 @@ def run_test(repro_dir: str, test_file: str, port: Optional[int] = None,
 
 @mcp.tool()
 def repl_eval(repro_dir: str, code: str, timeout: int = 30) -> str:
-    """Evaluate Clojure code against a running Metabase instance's socket REPL.
+    """Evaluate Clojure code against a running Metabase instance via nREPL.
 
-    The socket REPL is at port 3000 + HTTP_PORT. No nREPL required."""
+    Uses nREPL (via clj-nrepl-eval) when available, falls back to socket REPL."""
     return repl.repl_eval(repro_dir, code, timeout)
+
+
+@mcp.tool()
+def browser_snapshot(repro_dir: str, name: str = "") -> str:
+    """Take a page snapshot and save to file. Returns summary with interactive element refs.
+
+    Use Read tool on the saved YAML file to inspect full page structure."""
+    return browser.browser_snapshot(repro_dir, name)
 
 
 @mcp.tool()

@@ -36,15 +36,13 @@ Note: `t2/update!` may return `0` even when successful. Verify with `t2/select-o
 (qp.compile/compile {:database 1 :type :query :query {:source-table 1 :filter [:= [:field 1 nil] 42]}})
 ```
 
-**Load test/dev namespaces** (advanced):
+**Load test/dev namespaces** (available natively — no setup needed):
 ```clojure
-(require '[clojure.java.io :as io])
-(.addURL (.getContextClassLoader (Thread/currentThread))
-         (io/as-url (io/file "./repro/<ISSUE-ID>/source/test")))
-(.addURL (.getContextClassLoader (Thread/currentThread))
-         (io/as-url (io/file "./repro/<ISSUE-ID>/source/dev")))
 (require '[metabase.test :as mt])
 ```
+
+Test namespaces are on the classpath when Metabase starts via `clj`.
+`metabase.test`, `dev`, and enterprise test namespaces are all available.
 
 Key test/dev namespaces: `metabase.test` (`mt`) — `mt/user-http-request`, `mt/id`, `mt/with-temp`; `dev` — `dev/pprint-sql`, `dev/explain-query`.
 
