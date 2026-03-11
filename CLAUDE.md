@@ -28,6 +28,7 @@ Bare clone at `./git/metabase/` (no working tree). A persistent master worktree 
 - **MCP server base directory**: The `metabase-repro` MCP tools resolve `repro_dir` relative to their own project root (set in `.mcp.json`), NOT relative to the Claude Code CWD. Use absolute paths from tool output (e.g., `setup_worktree` returns the full worktree path). For Grep/Read, use the absolute path returned by the tool.
 - **Default appdb is Postgres**: The repro-bot defaults to Postgres for the application database.
 - **H2 limitations** (only relevant when H2 is explicitly chosen): H2 does NOT support `report-timezone`, reserves SQL keywords (`value`, `count`, `key`, `type`) as column names/aliases, and may reject NULL insertions even after dropping NOT NULL constraints via `ALTER TABLE`.
+- **Appdb as data warehouse**: The Postgres appdb can double as a data warehouse — register it in Metabase via `POST /api/database` with the same connection details. Use REPL + `next.jdbc` to `CREATE SCHEMA` and `CREATE TABLE` within it for multi-schema testing. No separate DB container needed.
 
 ## State Files (per repro directory)
 - `<REPRO_DIR>/port` — Metabase HTTP port

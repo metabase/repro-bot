@@ -319,6 +319,10 @@ You can repeat steps 3–5 to switch versions multiple times in a single investi
 
 > **REPL-first approach**: Prefer the REPL over API calls for data setup and state inspection. The REPL is faster (no HTTP overhead), more expressive (full Clojure), and gives direct access to internals. Use API calls only when testing the HTTP layer specifically. Use Playwright only for visual/UI verification.
 
+> **Multi-schema setup**: If the bug involves a picker or component that auto-hides with only one schema/item (look for `useAutoSelectOnlyItem` in source), you need a multi-schema DB. Register the Postgres appdb as a data warehouse via `POST /api/database` with the same connection details, then use REPL + `next.jdbc` to `CREATE SCHEMA` and `CREATE TABLE` within it.
+
+> **CSV upload / multipart limitation**: The `api_call` MCP tool does not support multipart form data, so CSV uploads via `POST /api/upload/csv` will not work. Instead, simulate uploads by creating the schema and table directly via REPL + `next.jdbc`.
+
 > **Source worktree path**: The source code for the issue's version is at `./repro/<ISSUE-ID>/source/` (NOT `./repro/<ISSUE-ID>/`). The repro directory `./repro/<ISSUE-ID>/` contains H2 DB, logs, env file, and the `playwright/` screenshot directory — source is always in the `source/` subdirectory.
 
 > **Codebase guidance**: Both `./repro/<ISSUE-ID>/source/` and `./repro/master/` contain a `CLAUDE.md` file with detailed instructions for navigating the Metabase codebase — read it when exploring source code. It documents conventions, key directories, and patterns that will help you find what you need faster.
