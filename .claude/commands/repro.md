@@ -188,6 +188,8 @@ Invoke the `metabase-reference` skill for REPL recipes, API patterns, domain qui
 | Code logic / edge case | **REPL**: read source then invoke functions |
 | Checking if fixed | Compare source + **REPL** to test both versions |
 
+> **Code analysis budget**: When investigating via code analysis, compare the buggy version's source with master in at most 10-12 targeted file reads. Do NOT trace full git history — if the bug is clear from source comparison, that's sufficient evidence. Save git archaeology for ambiguous cases.
+
 > **Backend bugs**: For backend-classified bugs, limit Playwright to 1-2 screenshots for evidence. Do NOT iterate on UI reproduction if REPL already confirmed the bug.
 
 > **Timing / race-condition bugs**: If reproduction requires simulating slow API responses or race conditions that can't be triggered locally, proceed with code analysis. Note in report that root cause is confirmed via code review but not empirically observable in a single-instance environment.
@@ -260,6 +262,8 @@ WebFetch https://www.metabase.com/docs/latest/<relevant-section>
 ### After Each Attempt
 
 Evaluate: what was tested, actual result, whether it matches reported behavior. Self-critique: "Did I test the right thing?"
+
+> **Code analysis as reproduction**: If the defective code path is unambiguously identified in source AND either (a) a fix exists in a newer version, or (b) the logic error is self-evident, classify as REPRODUCED (via code analysis). Note in the report that reproduction was via source review, not live testing.
 
 **Stop when**: REPRODUCED, NOT REPRODUCED, or after 3 inconclusive attempts → INCONCLUSIVE.
 
@@ -340,7 +344,7 @@ mcp__linear-server__save_comment(issueId: "<LINEAR-ID>", body: "<comment body>")
 | NOT REPRODUCED | `.Auto Repro Failed` |
 | INCONCLUSIVE | `.Auto Repro Inconclusive` |
 
-The `labels` parameter REPLACES all labels — always include existing labels. Use the **exact full label names** above (e.g. `.Auto Repro Success`, NOT `.Auto Repro`). Fetch labels once with `list_issue_labels` using the full name — do NOT retry with partial names or variations if denied.
+The `labels` parameter REPLACES all labels — always include existing labels. Use the **exact full label names** above (e.g. `.Auto Repro Success`, NOT `.Auto Repro`). Fetch labels **once** with `list_issue_labels` at the start of Phase 6. Do not re-fetch — do NOT retry with partial names or variations if denied.
 
 If a Playwright screenshot was captured, describe it in the comment. Do NOT attach via `create_attachment` with base64 (known to fail).
 

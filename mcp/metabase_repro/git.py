@@ -136,7 +136,7 @@ def _pre_resolve_dev_classpath(source_dir: str, messages: list[str]):
         messages.append("Dev dependencies already resolved.")
         return
     try:
-        result = run(["clj", "-A:dev:ee:ee-dev", "-P"], cwd=source_dir, timeout=500)
+        result = run(["clojure", "-A:dev:ee:ee-dev", "-P"], cwd=source_dir, timeout=500)
         if result.returncode == 0:
             with open(cache_marker, "w") as f:
                 f.write("ok")
@@ -144,7 +144,7 @@ def _pre_resolve_dev_classpath(source_dir: str, messages: list[str]):
         else:
             messages.append(f"WARNING: Dev dep resolution failed: {result.stderr[:200]}")
     except FileNotFoundError:
-        messages.append("WARNING: clj not found — dev deps not pre-resolved.")
+        messages.append("WARNING: clojure not found — dev deps not pre-resolved.")
     except Exception as e:
         messages.append(f"WARNING: Dev dep resolution failed: {e}")
 

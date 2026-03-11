@@ -263,7 +263,7 @@ def start_metabase(repro_dir: str, version: str, port: int | None = None) -> str
         "deps": {"metabase/jar": {"local/root": jar_path}}
     })
     cmd = [
-        "clj",
+        "clojure",
         "-Sdeps", sdeps,
         "-A:dev:ee:ee-dev",
         f"-J-Dclojure.server.repl={{:port {repl_port} :accept clojure.core.server/repl}}",
