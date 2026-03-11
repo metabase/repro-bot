@@ -4,7 +4,7 @@ from __future__ import annotations
 import socket
 import time
 
-from .core import read_state_file
+from .core import read_state_file, truncate_output
 
 
 def repl_eval(repro_dir: str, code: str, timeout: int = 30) -> str:
@@ -31,7 +31,7 @@ def repl_eval(repro_dir: str, code: str, timeout: int = 30) -> str:
         sock.close()
         if not result.strip():
             return f"ERROR: REPL eval timed out after {timeout}s — no response received. Try increasing timeout."
-        return result.strip()
+        return truncate_output(result.strip())
     except socket.timeout:
         return f"ERROR: Socket REPL timed out after {timeout}s"
     except ConnectionRefusedError:

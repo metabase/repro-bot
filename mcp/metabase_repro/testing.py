@@ -5,10 +5,20 @@ import logging
 import os
 import re
 
-from .core import repro_path, run, read_state_file
+from .core import repro_path, run, read_state_file, truncate_output
 from .repl import repl_eval as _repl_eval_fn
 
 logger = logging.getLogger(__name__)
+
+
+def _node_env() -> dict[str, str] | None:
+    """Return env dict with NODE_BIN_DIR prepended to PATH, or None if not set."""
+    node_bin = os.environ.get("NODE_BIN_DIR")
+    if not node_bin:
+        return None
+    env = os.environ.copy()
+    env["PATH"] = f"{node_bin}:{env.get('PATH', '')}"
+    return env
 
 
 def run_test(repro_dir: str, test_file: str, port: int | None = None,
@@ -151,11 +161,12 @@ def _run_clojure_test(source_dir: str, test_file: str, port: int | None, repro_d
 def _run_jest_test(source_dir: str, test_file: str) -> str:
     """Run a Jest unit test."""
     result = run(
-        ["yarn", "test-unit", f"--testPathPattern={test_file}"],
+        ["yarn", "--ignore-engines", "test-unit", f"--testPathPattern={test_file}"],
         cwd=source_dir,
         timeout=120,
+        env=_node_env(),
     )
-    return result.stdout + result.stderr
+    return truncate_output(result.stdout + result.stderr)
 
 
 def _run_cypress_test(source_dir: str, test_file: str, port: int | None) -> str:
@@ -164,7 +175,7 @@ def _run_cypress_test(source_dir: str, test_file: str, port: int | None) -> str:
         return "ERROR: Cypress tests require a port for the running Metabase instance"
 
     import subprocess
-    env = os.environ.copy()
+    env = _node_env() or os.environ.copy()
     env["CYPRESS_BASE_URL"] = f"http://localhost:{port}"
 
     result = subprocess.run(
@@ -172,4 +183,4 @@ def _run_cypress_test(source_dir: str, test_file: str, port: int | None) -> str:
         capture_output=True, text=True,
         cwd=source_dir, env=env, timeout=300,
     )
-    return result.stdout + result.stderr
+    return truncate_output(result.stdout + result.stderr)

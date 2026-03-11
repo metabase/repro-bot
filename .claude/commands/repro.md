@@ -299,6 +299,8 @@ Select strategy based on issue classification. Strategies can be combined within
 | Code logic / edge case | **REPL**: read source then invoke functions directly |
 | Checking if bug is fixed | Compare source + **REPL** to test both versions' behavior |
 
+> **Tip — Time-series bugs**: For time-series label spacing or interval bugs, test at multiple data densities: ~12 data points (monthly over 1 year), ~36 points (monthly over 3 years), and ~60 points (monthly over 5 years). The bug often manifests only at a specific density where ECharts switches between monthly/quarterly/yearly interval logic. A 49-month sample may show quarterly labels instead of monthly, making the bug appear unreproduced.
+
 ### Upgrade / Version-Switch Scenarios
 
 If the issue involves upgrading between versions or converting between OSS and EE, you can start and stop different versions of Metabase against the same database:
@@ -614,11 +616,15 @@ This captures all changes (including new untracked files) and saves them to `./r
 
 **Edit tool failures**: If the Edit tool fails with "file not read" or similar errors, re-read the file with the Read tool and retry the Edit once. If it still fails, use the Write tool to write the complete file. Do NOT fall back to Bash workarounds (`cat >>`, `cp`, `python3 -c`) — these trigger permission denials in CI and waste many turns.
 
+**Bash restrictions in CI**: In CI mode, many Bash commands are blocked by permission rules. Pipe redirection (`2>&1`), env-var prefix commands (`NODE_OPTIONS=... yarn ...`), and direct `yarn`/`jest`/`cypress` invocations will be denied. Always use `run_test` MCP tool for test execution — do NOT attempt raw shell commands as workarounds.
+
 If you can't write a useful failing test (can't find the right file, test doesn't fail as expected, REPL errors, root cause is too vague), note the attempt and reason in the report but **do not block the workflow**. Move on to Phase 6.
 
 If the test cannot be run via `run_test` (classpath issues, large file timeouts, enterprise path issues), write a minimal inline REPL snippet that reproduces the assertion logic without the test framework and confirm it produces the wrong output. Document this as equivalent test evidence in the report.
 
 If `run_test` fails twice, do NOT attempt manual classloader manipulation. Write an inline REPL snippet instead or skip test execution — the patch file is still valuable.
+
+**Node version errors in CI**: If `run_test` for a Jest or Cypress test fails with "The engine \"node\" is incompatible" or similar Node version errors, do NOT attempt to run yarn/jest/cypress directly via Bash — these commands will be blocked by CI permissions. Instead, verify the test logic via code analysis and document it as "verified by code review, could not execute in CI due to Node version mismatch". The `run_test` MCP tool already handles `--ignore-engines` and `NODE_BIN_DIR` PATH fixes, so if it still fails, manual workarounds won't help.
 
 ---
 
