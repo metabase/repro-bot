@@ -79,12 +79,26 @@ def _run_clojure_test(source_dir: str, test_file: str, port: int | None, repro_d
     if not port:
         return "ERROR: Clojure tests require a running Metabase instance (need port for socket REPL)"
 
-    # Derive namespace: test/metabase/foo/bar_test.clj → metabase.foo.bar-test
+    # Detect enterprise test path
+    is_enterprise = test_file.startswith("enterprise/")
+
+    # Derive namespace from test file path
     ns = test_file
-    ns = re.sub(r"^test/", "", ns)
+    if is_enterprise:
+        ns = re.sub(r"^enterprise/backend/test/", "", ns)
+    else:
+        ns = re.sub(r"^test/", "", ns)
     ns = re.sub(r"\.cljc?$", "", ns)
     ns = ns.replace("/", ".")
     ns = ns.replace("_", "-")
+
+    # Build list of classpath directories to add
+    cp_dirs = [f"{source_dir}/test", f"{source_dir}/dev"]
+    if is_enterprise:
+        cp_dirs.extend([
+            f"{source_dir}/enterprise/backend/test",
+            f"{source_dir}/enterprise/backend/src",
+        ])
 
     # Resolve dev dependency JARs from deps.edn :dev alias
     dev_jars = _resolve_dev_classpath(source_dir)
@@ -96,15 +110,19 @@ def _run_clojure_test(source_dir: str, test_file: str, port: int | None, repro_d
     else:
         add_jars_code = ""
 
+    # Build addURL calls for all classpath dirs
+    cp_urls = "\n".join(
+        f'      (let [u (io/as-url (io/file "{d}"))] (.addURL cl u))'
+        for d in cp_dirs
+    )
+
     clj_code = f"""
 (require '[clojure.java.io :as io])
 (let [cl (.getContextClassLoader (Thread/currentThread))
-      test-url (io/as-url (io/file "{source_dir}/test"))
-      dev-url  (io/as-url (io/file "{source_dir}/dev"))]
+      test-url (io/as-url (io/file "{source_dir}/test"))]
   (when-not (some #{{test-url}} (seq (.getURLs cl)))
-    (.addURL cl test-url)
-    (.addURL cl dev-url) {add_jars_code}
-    (println "Added test/dev paths + dev deps to classpath")))
+{cp_urls} {add_jars_code}
+    (println "Added classpath entries:" (mapv str (.getURLs cl)))))
 (require '{ns} :reload)
 (let [result (clojure.test/run-tests '{ns})]
   (when (pos? (+ (:fail result) (:error result)))

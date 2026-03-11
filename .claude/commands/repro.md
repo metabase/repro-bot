@@ -24,6 +24,10 @@ Examples:
 
 > **Code search**: ALWAYS search Metabase source code using Grep/Glob against local worktrees (`./repro/master/`, `./repro/<ISSUE-ID>/source/`). NEVER use `gh api search/code` or `gh search code` — these GitHub code search APIs are slow, rate-limited, and return incomplete results.
 
+> **Time budget**: Aim to complete the entire workflow in **~25 minutes**. Prioritize reproduction over exploration — once the bug is reproduced (or confirmed not reproduced), move quickly to test writing and reporting. Do not spend time on deep root cause analysis, git history, migration archaeology, or alternate reproduction paths beyond what's needed to confirm the bug.
+
+> **Git commands**: Use `git -C <path>` instead of `cd <path> && git ...` to avoid permission denials on directory changes.
+
 > **CI mode**: When the `GITHUB_ACTIONS_RUN_URL` environment variable is set, this workflow is running in GitHub Actions CI. In CI mode:
 > - If **any phase fails catastrophically** (MCP tool errors, preflight failures, Metabase startup failures, or unrecoverable errors), post the error to Linear as an internal-only comment before stopping. The comment must include:
 >   1. A summary of what failed and the exact error message
@@ -271,6 +275,8 @@ mcp__metabase-repro__get_session_token(repro_dir="repro/<ISSUE-ID>")
 
 ## Phase 4: Reproduction (max 3 attempts)
 
+> **Primary goal**: Reproduce (or confirm not reproducible) the reported behavior. Root cause analysis is **nice to have** — do it if it falls out naturally from reproduction work or light code reading, but do NOT spend more than ~5 extra minutes on it. Once you can confirm REPRODUCED / NOT REPRODUCED / INCONCLUSIVE, move to Phase 5. Do NOT investigate migrations, DB internals, git history, or alternate reproduction paths beyond what's needed to confirm the bug.
+
 Select strategy based on issue classification. Strategies can be combined within one attempt.
 
 ### Strategy Selection
@@ -370,7 +376,7 @@ playwright-cli close
 
 > **NEVER use `clojure` CLI, `clojure -M`, or `clojure -X`. ALWAYS use the `repl_eval` MCP tool or `mcp__metabase-repro__run_test`. Starting a fresh JVM wastes 30-60 seconds per invocation.**
 
-The REPL is the **primary investigation tool** — prefer it over API calls for data setup, state inspection, and root cause exploration. Use the `repl_eval` MCP tool which connects directly to the socket REPL:
+The REPL is the **primary investigation tool** — prefer it over API calls for data setup, state inspection, and root cause exploration. After a REPL timeout, do NOT send arithmetic pings like `(+ 1 1)` — just send your next real command. Use the `repl_eval` MCP tool which connects directly to the socket REPL:
 
 ```
 mcp__metabase-repro__repl_eval(repro_dir="repro/<ISSUE-ID>", code="(require '[toucan2.core :as t2]) (t2/count :model/Database)")
@@ -504,7 +510,7 @@ Evaluate:
 
 ## Phase 5: Write Failing Test
 
-> **Gate**: Only run this phase when the reproduction status is **REPRODUCED** AND a root cause hypothesis has been identified. If the status is NOT REPRODUCED, INCONCLUSIVE, or no root cause was found, skip to Phase 6.
+> **Gate**: Only run this phase when the reproduction status is **REPRODUCED**. A root cause hypothesis is helpful but not required — if the reproduction steps make the failing behavior clear enough to encode as a test, proceed even without a root cause. If the status is NOT REPRODUCED or INCONCLUSIVE, skip to Phase 6.
 
 > **NEVER use `clojure` CLI, `clojure -M`, or `clojure -X`. ALWAYS use the `repl_eval` MCP tool or `mcp__metabase-repro__run_test`. Starting a fresh JVM wastes 30-60 seconds per invocation.**
 
@@ -599,6 +605,10 @@ This captures all changes (including new untracked files) and saves them to `./r
 
 If you can't write a useful failing test (can't find the right file, test doesn't fail as expected, REPL errors, root cause is too vague), note the attempt and reason in the report but **do not block the workflow**. Move on to Phase 6.
 
+If the test cannot be run via `run_test` (classpath issues, large file timeouts, enterprise path issues), write a minimal inline REPL snippet that reproduces the assertion logic without the test framework and confirm it produces the wrong output. Document this as equivalent test evidence in the report.
+
+If `run_test` fails twice, do NOT attempt manual classloader manipulation. Write an inline REPL snippet instead or skip test execution — the patch file is still valuable.
+
 ---
 
 ## Phase 6: Report & Post
@@ -634,8 +644,9 @@ Choose one:
 <Paste the most relevant evidence: API response, REPL output, or screenshot description>
 <If browser reproduction: describe what was observed in the UI, reference any screenshot>
 
-### Root Cause Hypothesis
-<If REPRODUCED: likely cause based on findings>
+### Root Cause Hypothesis (if identified)
+<If REPRODUCED and root cause is clear: likely cause based on findings>
+<If root cause is unclear: omit this section or write "Root cause not determined — reproduction steps above demonstrate the bug.">
 <If NOT REPRODUCED: why it may work locally but fail in the reported environment>
 <If INCONCLUSIVE: what additional environment or setup would be needed>
 
