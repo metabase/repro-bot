@@ -329,7 +329,11 @@ You can repeat steps 3–5 to switch versions multiple times in a single investi
 
 > **H2 reserved keywords**: H2 reserves `value`, `count`, `key`, `type` as SQL keywords — avoid using them as column aliases in native SQL test queries. Use `amount`, `qty`, `cnt`, etc. instead.
 
+> **H2 SQL tips**: H2 does NOT support `DATETRUNC()`. Use `CAST(col AS DATE)` to get a proper date-typed column for testing date format settings. `FORMATDATETIME()` returns text, not a date type — avoid it when testing Metabase's date formatting. In the Sample Database, `CATEGORY` is in `PRODUCTS`, not `ORDERS` — use `JOIN PRODUCTS P ON O.PRODUCT_ID = P.ID` to access categories.
+
 > **playwright-cli single expressions**: Each `playwright-cli run-code` call must contain a single expression — no semicolons between statements. Avoid async chaining with `.then()` — `run-code` only supports simple synchronous-looking expressions. For bounding box access or hover, use `playwright-cli hover <ref>` on known element refs instead. Use separate `run-code` calls, or chain with `&&` at the shell level.
+
+> **playwright-cli resize**: Use `playwright-cli resize <width> <height>` to change viewport size. The `run-code` approach with `page.setViewportSize()` does not work.
 
 > **REPL-first approach**: Prefer the REPL over API calls for data setup and state inspection. The REPL is faster (no HTTP overhead), more expressive (full Clojure), and gives direct access to internals. Use API calls only when testing the HTTP layer specifically. Use Playwright only for visual/UI verification.
 
@@ -624,7 +628,11 @@ If the test cannot be run via `run_test` (classpath issues, large file timeouts,
 
 If `run_test` fails twice, do NOT attempt manual classloader manipulation. Write an inline REPL snippet instead or skip test execution — the patch file is still valuable.
 
+**Large enterprise tests**: Enterprise test files in `enterprise/backend/test/` can exceed 1000 lines. If `run_test` times out on a large enterprise test, write a minimal inline REPL snippet to verify just the assertion logic instead of running the full test suite.
+
 **Node version errors in CI**: If `run_test` for a Jest or Cypress test fails with "The engine \"node\" is incompatible" or similar Node version errors, do NOT attempt to run yarn/jest/cypress directly via Bash — these commands will be blocked by CI permissions. Instead, verify the test logic via code analysis and document it as "verified by code review, could not execute in CI due to Node version mismatch". The `run_test` MCP tool already handles `--ignore-engines` and `NODE_BIN_DIR` PATH fixes, so if it still fails, manual workarounds won't help.
+
+**Jest/Cypress tooling failures**: If `run_test` fails for a Jest or Cypress test due to package manager issues (yarn/bun/corepack errors, missing node_modules), do NOT attempt manual package manager installation or direct shell commands. Save the test patch via `save_test_patch` — the patch is valid evidence even without execution. Note the tooling error in the report.
 
 ---
 

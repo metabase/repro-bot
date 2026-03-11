@@ -1,6 +1,7 @@
 """Test running: execute Clojure, Jest, or Cypress tests against a source worktree."""
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -9,6 +10,20 @@ from .core import repro_path, run, read_state_file, truncate_output
 from .repl import repl_eval as _repl_eval_fn
 
 logger = logging.getLogger(__name__)
+
+
+def _detect_pkg_manager(source_dir: str) -> str:
+    """Detect package manager from package.json. Returns 'bun' or 'yarn'."""
+    pkg_json = os.path.join(source_dir, "package.json")
+    try:
+        with open(pkg_json) as f:
+            data = json.load(f)
+        pm = data.get("packageManager", "")
+        if pm.startswith("bun"):
+            return "bun"
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+    return "yarn"
 
 
 def _node_env() -> dict[str, str] | None:
@@ -160,12 +175,16 @@ def _run_clojure_test(source_dir: str, test_file: str, port: int | None, repro_d
 
 def _run_jest_test(source_dir: str, test_file: str) -> str:
     """Run a Jest unit test."""
-    result = run(
-        ["yarn", "--ignore-engines", "test-unit", f"--testPathPattern={test_file}"],
-        cwd=source_dir,
-        timeout=120,
-        env=_node_env(),
-    )
+    if not os.path.isdir(os.path.join(source_dir, "node_modules")):
+        return "ERROR: node_modules not found. Run 'yarn install' or 'bun install' in the source worktree first, or skip test execution and save the patch."
+
+    pkg_mgr = _detect_pkg_manager(source_dir)
+    if pkg_mgr == "bun":
+        cmd = ["bun", "run", "test-unit", f"--testPathPattern={test_file}"]
+    else:
+        cmd = ["yarn", "--ignore-engines", "test-unit", f"--testPathPattern={test_file}"]
+
+    result = run(cmd, cwd=source_dir, timeout=120, env=_node_env())
     return truncate_output(result.stdout + result.stderr)
 
 
@@ -174,12 +193,21 @@ def _run_cypress_test(source_dir: str, test_file: str, port: int | None) -> str:
     if not port:
         return "ERROR: Cypress tests require a port for the running Metabase instance"
 
+    if not os.path.isdir(os.path.join(source_dir, "node_modules")):
+        return "ERROR: node_modules not found. Run 'yarn install' or 'bun install' in the source worktree first, or skip test execution and save the patch."
+
     import subprocess
     env = _node_env() or os.environ.copy()
     env["CYPRESS_BASE_URL"] = f"http://localhost:{port}"
 
+    pkg_mgr = _detect_pkg_manager(source_dir)
+    if pkg_mgr == "bun":
+        cmd = ["bun", "run", "test-cypress-run", "--spec", test_file]
+    else:
+        cmd = ["yarn", "test-cypress-run", "--spec", test_file]
+
     result = subprocess.run(
-        ["yarn", "test-cypress-run", "--spec", test_file],
+        cmd,
         capture_output=True, text=True,
         cwd=source_dir, env=env, timeout=300,
     )
