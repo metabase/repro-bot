@@ -12,7 +12,7 @@ Examples:
 
 > **Note**: Do not commit any changes. The worktree is ephemeral — any source edits made during investigation (e.g. adding debug logging) should be discarded when the worktree is removed in Phase 7.
 
-> **CRITICAL**: Use `mcp__metabase-repro__*` MCP tools for ALL Metabase operations (starting/stopping instances, API calls, worktree management, test running). These tools handle state management, authentication, and process lifecycle automatically — no shell scripts needed. **NEVER fall back to raw Bash** (curl, java -jar, docker run, etc.) for any operation that an MCP tool handles. If any `mcp__metabase-repro__*` tool fails — whether with a connection/server error OR an error in its output (e.g. "auto-setup failed", "could not obtain session token") — **STOP the entire /repro workflow immediately** and report the exact error to the user so the MCP server code can be fixed. Do NOT attempt to work around MCP tool failures with manual curl/bash commands.
+> **CRITICAL**: Use `mcp__metabase-repro__*` MCP tools for ALL Metabase operations (starting/stopping instances, API calls, worktree management, test running). These tools handle state management, authentication, and process lifecycle automatically — no shell scripts needed. **NEVER fall back to raw Bash** (curl, java -jar, docker run, etc.) for any operation that an MCP tool handles. `curl` is not available — use the `api_call` MCP tool for all Metabase API requests. If any `mcp__metabase-repro__*` tool fails — whether with a connection/server error OR an error in its output (e.g. "auto-setup failed", "could not obtain session token") — **STOP the entire /repro workflow immediately** and report the exact error to the user so the MCP server code can be fixed. Do NOT attempt to work around MCP tool failures with manual curl/bash commands.
 
 > **Browser automation**: Use `playwright-cli` (installed as a Claude Code skill) for all browser automation. Run commands via the Bash tool (e.g. `playwright-cli goto https://...`). Do NOT use playwright-cli tools (`mcp__playwright__*`) — they are not configured. See the skill documentation at `.claude/skills/playwright-cli/SKILL.md` for the full command reference.
 
@@ -27,6 +27,8 @@ Examples:
 > **Time budget**: Aim to complete the entire workflow in **~25 minutes**. Prioritize reproduction over exploration — once the bug is reproduced (or confirmed not reproduced), move quickly to test writing and reporting. Do not spend time on deep root cause analysis, git history, migration archaeology, or alternate reproduction paths beyond what's needed to confirm the bug.
 
 > **Git commands**: Use `git -C <path>` instead of `cd <path> && git ...` to avoid permission denials on directory changes.
+
+> **MCP tool schemas**: When entering a new phase that needs MCP tools, batch-fetch all needed schemas in a single `ToolSearch` call (e.g., `select:tool1,tool2,tool3`) rather than fetching one at a time. Each ToolSearch round-trip costs 3 messages.
 
 > **CI mode**: When the `GITHUB_ACTIONS_RUN_URL` environment variable is set, this workflow is running in GitHub Actions CI. In CI mode:
 > - If **any phase fails catastrophically** (MCP tool errors, preflight failures, Metabase startup failures, or unrecoverable errors), post the error to Linear as an internal-only comment before stopping. The comment must include:
@@ -338,33 +340,31 @@ You can repeat steps 3–5 to switch versions multiple times in a single investi
 Use `playwright-cli` via the Bash tool for all browser automation. After logging in, navigate directly to the target page — do NOT snapshot intermediate pages (home, browse) unless they're part of the reproduction.
 
 **Token reduction rules**:
-- Prefer `playwright-cli screenshot` over `playwright-cli snapshot` for verification — screenshots have a fixed token cost, while snapshots of complex pages (especially data tables, pivot tables) can be unbounded
-- **Never** snapshot pivot tables or large data views — use the API to verify data correctness instead
-- Use API calls (`POST /api/card`, `POST /api/dataset`) to create questions, apply filters, and set up state — reserve Playwright only for final visual verification of the bug
+- **ALWAYS** create questions, dashboards, filters, and all data setup via API (`api_call` MCP tool) or REPL — NEVER use Playwright to navigate creation UIs (e.g. "New Question" flows). Reserve Playwright exclusively for the final UI interaction that demonstrates the bug. If you find yourself clicking through creation flows in Playwright, stop and switch to the API.
 - Navigate directly to `/question/<ID>` or `/dashboard/<ID>` instead of clicking through menus
-- Only use `playwright-cli snapshot` when you need to find a specific interactive element (button, input field) to click
+- **Snapshot only for interaction or proof**: Only use `playwright-cli snapshot` when you (a) need element refs to click/fill/hover, or (b) need to capture DOM state that proves the bug (e.g. tooltip content, accessibility tree issues). NEVER snapshot just to see where you are or verify navigation — use `playwright-cli screenshot` for that (fixed token cost). NEVER snapshot pivot tables, large data views, or the home page.
+- When reading snapshot YAML, use the Read tool with `offset`/`limit` — full Metabase page YAMLs can be very large
+- NEVER use `&` (background) operators with playwright-cli commands — they cause permission denials
 
 **Commands** (use the port from `start_metabase` output):
 ```bash
-# Open browser and navigate
+# Login via session cookie (skip the login UI entirely — saves 3-4 tool calls)
 playwright-cli open http://localhost:<PORT>/auth/login
-# Take a snapshot to get element refs
-playwright-cli snapshot
-# Fill form fields using refs from snapshot
-playwright-cli fill <ref> "value"
-# Click elements using refs from snapshot
-playwright-cli click <ref>
-# Navigate to a new URL
+playwright-cli cookie-set metabase.SESSION "<session-token>" --domain=localhost
 playwright-cli goto http://localhost:<PORT>/question/1
-# Take screenshot — save to repro dir
+# Take screenshot to verify page loaded / capture bug visually
 playwright-cli screenshot --filename=./repro/<ISSUE-ID>/playwright/screenshot.png
+# Only snapshot when you need element refs to interact with (click, fill, hover)
+playwright-cli snapshot
+playwright-cli fill <ref> "value"
+playwright-cli click <ref>
 # Close browser when done
 playwright-cli close
 ```
 
-**Login shortcut**: After opening the login page, take a snapshot to get element refs, then fill the email and password fields and click the sign-in button. Check `start_metabase` output for the password: `blackjet` for EE, `1Blackjet!` for OSS.
+Get the session token from the `get_session_token` MCP tool or read `./repro/<ISSUE-ID>/session-token`.
 
-**Avoid snapshot after login**: The sign-in click navigates to the home page which has a very large DOM. Do NOT snapshot the home page. Instead, immediately `playwright-cli goto` the target URL (e.g. `/question/<ID>`, `/dashboard/<ID>`).
+**Avoid snapshotting the home page**: The home page has a very large DOM. After cookie-based login, immediately `playwright-cli goto` the target URL (e.g. `/question/<ID>`, `/dashboard/<ID>`).
 
 **"Start exploring" modal**: Metabase shows a "Start exploring" modal when viewing a saved native question for the first time. Be prepared for an extra click to dismiss it — snapshot to find the button ref and click it.
 
@@ -603,6 +603,8 @@ This captures all changes (including new untracked files) and saves them to `./r
 
 ### If Test Writing Fails
 
+**Edit tool failures**: If the Edit tool fails with "file not read" or similar errors, re-read the file with the Read tool and retry the Edit once. If it still fails, use the Write tool to write the complete file. Do NOT fall back to Bash workarounds (`cat >>`, `cp`, `python3 -c`) — these trigger permission denials in CI and waste many turns.
+
 If you can't write a useful failing test (can't find the right file, test doesn't fail as expected, REPL errors, root cause is too vague), note the attempt and reason in the report but **do not block the workflow**. Move on to Phase 6.
 
 If the test cannot be run via `run_test` (classpath issues, large file timeouts, enterprise path issues), write a minimal inline REPL snippet that reproduces the assertion logic without the test framework and confirm it produces the wrong output. Document this as equivalent test evidence in the report.
@@ -755,6 +757,8 @@ The following are **intentionally left in place** for post-investigation inspect
 - Test diff (if generated): `./repro/<ISSUE-ID>/test-diff.patch`
 
 No user notification needed — the Linear comment is the deliverable.
+
+> **CRITICAL**: Do NOT end the conversation after cleanup. You MUST proceed to Phase 8 (Self-Review) to write SUGGESTIONS.md. The workflow is not complete until SUGGESTIONS.md is written.
 
 ---
 
