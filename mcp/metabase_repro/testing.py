@@ -55,16 +55,30 @@ def run_test(repro_dir: str, test_file: str, port: int | None = None,
 def _resolve_dev_classpath(source_dir: str) -> list[str]:
     """Resolve :dev alias Maven dependency JARs from the source worktree.
 
-    Runs `clj -A:dev -Spath` and extracts .jar paths from the classpath output.
+    Checks for a cached .dev-classpath file first (written by setup_worktree),
+    then falls back to running `clj -A:dev -Spath`.
     Returns an empty list on failure (clj not found, resolution error, etc.).
     """
+    # Check for cached classpath from setup_worktree
+    cache_file = os.path.join(source_dir, ".dev-classpath")
+    if os.path.exists(cache_file):
+        with open(cache_file) as f:
+            jars = [line.strip() for line in f if line.strip()]
+        if jars:
+            logger.info("Using cached dev classpath (%d JARs)", len(jars))
+            return jars
+
+    # Fall back to resolving (longer timeout for fresh downloads)
     try:
-        result = run(["clj", "-A:dev", "-Spath"], cwd=source_dir, timeout=120)
+        result = run(["clj", "-A:dev", "-Spath"], cwd=source_dir, timeout=300)
         if result.returncode != 0:
             logger.warning("clj -A:dev -Spath failed: %s", result.stderr)
             return []
         classpath = result.stdout.strip()
         jars = [p for p in classpath.split(":") if p.endswith(".jar")]
+        # Cache for next time
+        with open(cache_file, "w") as f:
+            f.write("\n".join(jars))
         return jars
     except FileNotFoundError:
         logger.warning("clj not found — dev dependency JARs will not be added to classpath")

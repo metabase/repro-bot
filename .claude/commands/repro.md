@@ -24,11 +24,15 @@ Examples:
 
 > **Code search**: ALWAYS search Metabase source code using Grep/Glob against local worktrees (`./repro/master/`, `./repro/<ISSUE-ID>/source/`). NEVER use `gh api search/code` or `gh search code` — these GitHub code search APIs are slow, rate-limited, and return incomplete results.
 
+> **File reads**: When reading source files, read the whole file at once (or large 500+ line chunks) — do NOT scan through in 60-line windows. Each Read call is a full round trip that re-sends the entire context. Multiple small reads of the same file is one of the biggest token wastes.
+
 > **Time budget**: Aim to complete the entire workflow in **~25 minutes**. Prioritize reproduction over exploration — once the bug is reproduced (or confirmed not reproduced), move quickly to test writing and reporting. Do not spend time on deep root cause analysis, git history, migration archaeology, or alternate reproduction paths beyond what's needed to confirm the bug.
 
 > **Git commands**: Use `git -C <path>` instead of `cd <path> && git ...` to avoid permission denials on directory changes.
 
-> **MCP tool schemas**: When entering a new phase that needs MCP tools, batch-fetch all needed schemas in a single `ToolSearch` call (e.g., `select:tool1,tool2,tool3`) rather than fetching one at a time. Each ToolSearch round-trip costs 3 messages.
+> **MCP tool schemas**: At the **start of the run**, pre-fetch all MCP tool schemas you'll need across all phases in a single `ToolSearch` call: `select:mcp__metabase-repro__check_setup,mcp__metabase-repro__setup_master_worktree,mcp__metabase-repro__setup_worktree,mcp__metabase-repro__start_appdb,mcp__metabase-repro__start_metabase,mcp__metabase-repro__stop_metabase,mcp__metabase-repro__api_call,mcp__metabase-repro__get_session_token,mcp__metabase-repro__repl_eval,mcp__metabase-repro__run_test,mcp__metabase-repro__save_test_patch,mcp__metabase-repro__cleanup,mcp__metabase-repro__get_status,mcp__linear-server__list_issues,mcp__linear-server__list_comments,mcp__linear-server__get_issue,mcp__linear-server__save_comment,mcp__linear-server__save_issue,mcp__linear-server__list_issue_labels,mcp__linear-server__create_attachment`. Do NOT fetch schemas one-at-a-time as each round-trip wastes 3 messages.
+
+> **Parallelism**: ALWAYS make independent tool calls in the same turn. Examples: fetch issue from GitHub + Linear simultaneously; run `setup_worktree` + `start_appdb` together; do multiple Grep/Read calls at once. Every serial call re-sends the full context window — batching 2-3 calls per turn can cut total turns by 30%.
 
 > **CI mode**: When the `GITHUB_ACTIONS_RUN_URL` environment variable is set, this workflow is running in GitHub Actions CI. In CI mode:
 > - If **any phase fails catastrophically** (MCP tool errors, preflight failures, Metabase startup failures, or unrecoverable errors), post the error to Linear as an internal-only comment before stopping. The comment must include:
@@ -390,6 +394,10 @@ mcp__metabase-repro__repl_eval(repro_dir="repro/<ISSUE-ID>", code="(require '[to
 - **Root cause exploration**: Evaluate suspect functions with test inputs
 - **Environment modification**: Change settings, toggle features, modify data on-the-fly
 
+**REPL expression rules**:
+- **Send one expression per `repl_eval` call.** Multi-expression evals (e.g. `(do (update ...) (select ...))`) frequently timeout. Split them into separate calls — they can be parallel if independent.
+- After a REPL timeout, do NOT send arithmetic pings like `(+ 1 1)` — just send your next real command.
+
 **Important**: The JAR runs production namespaces only. Test/dev namespaces (`metabase.test`, `dev`) are NOT on the classpath by default. Production namespaces available out of the box:
 - `toucan2.core` (as `t2`) — DB queries: `t2/select`, `t2/select-one`, `t2/insert!`
 - `metabase.query-processor` (as `qp`) — run queries end-to-end
@@ -429,6 +437,7 @@ mcp__metabase-repro__repl_eval(repro_dir="repro/<ISSUE-ID>", code="(require '[to
 ```clojure
 (t2/update! :model/Setting :key "enable-pivoted-filters" {:value "true"})
 ```
+Note: `t2/update!` may return `0` even when the update succeeds (Toucan2 quirk). Always verify with a follow-up `t2/select-one` to confirm the change.
 
 **Check user permissions**:
 ```clojure

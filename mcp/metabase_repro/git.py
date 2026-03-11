@@ -105,6 +105,7 @@ def setup_worktree(repro_dir: str, version_ref: str) -> str:
 
         if current_ref == resolved_ref:
             messages.append(f"Worktree already at {resolved_ref}, reusing.")
+            _pre_resolve_dev_classpath(worktree_path, messages)
             return "\n".join(messages)
         else:
             messages.append(f"Worktree exists at {current_ref}, switching to {resolved_ref}...")
@@ -112,6 +113,7 @@ def setup_worktree(repro_dir: str, version_ref: str) -> str:
             if result.returncode != 0:
                 return f"ERROR switching worktree:\n{result.stderr}"
             messages.append(f"Worktree switched to {resolved_ref}")
+            _pre_resolve_dev_classpath(worktree_path, messages)
             return "\n".join(messages)
 
     messages.append(f"Creating worktree at {worktree_path} from {resolved_ref}...")
@@ -120,7 +122,32 @@ def setup_worktree(repro_dir: str, version_ref: str) -> str:
         return f"ERROR creating worktree:\n{result.stderr}"
 
     messages.append(f"Worktree ready at {worktree_path}")
+
+    # After worktree is ready, pre-resolve dev classpath (non-fatal)
+    _pre_resolve_dev_classpath(worktree_path, messages)
+
     return "\n".join(messages)
+
+
+def _pre_resolve_dev_classpath(source_dir: str, messages: list[str]):
+    """Pre-resolve :dev alias Maven deps and cache the JAR list."""
+    cache_file = os.path.join(source_dir, ".dev-classpath")
+    if os.path.exists(cache_file):
+        messages.append("Dev classpath already cached.")
+        return
+    try:
+        result = run(["clj", "-A:dev", "-Spath"], cwd=source_dir, timeout=500)
+        if result.returncode != 0:
+            messages.append(f"WARNING: Dev classpath resolution failed: {result.stderr[:200]}")
+            return
+        jars = [p for p in result.stdout.strip().split(":") if p.endswith(".jar")]
+        with open(cache_file, "w") as f:
+            f.write("\n".join(jars))
+        messages.append(f"Dev classpath cached ({len(jars)} JARs).")
+    except FileNotFoundError:
+        messages.append("WARNING: clj not found — dev classpath not cached.")
+    except Exception as e:
+        messages.append(f"WARNING: Dev classpath resolution failed: {e}")
 
 
 def save_test_patch(repro_dir: str) -> str:
