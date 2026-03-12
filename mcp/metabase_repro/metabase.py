@@ -257,11 +257,9 @@ def start_metabase(repro_dir: str, version: str, port: int | None = None) -> str
     if os.path.exists(config_file):
         env["MB_CONFIG_FILE_PATH"] = config_file
 
-    # Use clj with JAR on classpath + :dev:ee:ee-dev for test/dev deps
-    sdeps = json.dumps({
-        "paths": [],
-        "deps": {"metabase/jar": {"local/root": jar_path}}
-    })
+    # Use clojure with JAR on classpath + :dev:ee:ee-dev for test/dev deps
+    # -Sdeps requires EDN format (not JSON) — keys must be :keywords
+    sdeps = f'{{:paths [] :deps {{metabase/jar {{:local/root "{jar_path}"}}}}}}'
     cmd = [
         "clojure",
         "-Sdeps", sdeps,
