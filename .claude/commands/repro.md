@@ -275,6 +275,8 @@ Evaluate: what was tested, actual result, whether it matches reported behavior. 
 
 Invoke the `write-test` skill. Continue to Phase 6 after completion.
 
+> **Error recovery**: If the `write-test` skill fails (permission denied, tool error, or any other failure), do NOT stop. Log the error, note "Failing test not written: <reason>" for the report, and **continue to Phase 6**. Phase 5 failure must never prevent Phases 6-8 from running.
+
 ---
 
 ## Phase 6: Report & Post

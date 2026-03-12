@@ -8,6 +8,7 @@ import re
 import shutil
 import subprocess
 import time
+import zipfile
 from datetime import datetime, timezone
 import urllib.error
 import urllib.request
@@ -159,6 +160,19 @@ def check_setup_token(port: int) -> str:
     return token or ""
 
 
+def _read_main_class(jar_path: str) -> str:
+    """Read Main-Class from a JAR's META-INF/MANIFEST.MF. Falls back to 'metabase.core'."""
+    try:
+        with zipfile.ZipFile(jar_path) as zf:
+            manifest = zf.read("META-INF/MANIFEST.MF").decode("utf-8")
+            for line in manifest.splitlines():
+                if line.startswith("Main-Class:"):
+                    return line.split(":", 1)[1].strip()
+    except Exception:
+        pass
+    return "metabase.core"
+
+
 def _parse_env_edn(path: str) -> dict[str, str]:
     """Parse an env.edn file into environment variables.
 
@@ -269,11 +283,13 @@ def start_metabase(repro_dir: str, version: str, port: int | None = None) -> str
     base_cp = cp_result.stdout.strip()
     full_cp = f"{jar_path}:{base_cp}"
 
+    main_class = _read_main_class(jar_path)
+
     cmd = [
         "java",
         f"-Dclojure.server.repl={{:port {repl_port} :accept clojure.core.server/repl}}",
         "-cp", full_cp,
-        "clojure.main", "-m", "metabase.core",
+        "clojure.main", "-m", main_class,
     ]
 
     with open(log_path, "w") as log_file:
