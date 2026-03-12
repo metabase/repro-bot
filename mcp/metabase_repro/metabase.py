@@ -259,7 +259,7 @@ def start_metabase(repro_dir: str, version: str, port: int | None = None) -> str
 
     # Use clojure with JAR on classpath + :dev:ee:ee-dev for test/dev deps
     # -Sdeps requires EDN format (not JSON) — keys must be :keywords
-    sdeps = f'{{:paths [] :deps {{metabase/jar {{:local/root "{jar_path}"}}}}}}'
+    sdeps = f'{{:extra-paths ["{jar_path}"]}}'
     cmd = [
         "clojure",
         "-Sdeps", sdeps,
