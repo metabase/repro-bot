@@ -257,15 +257,23 @@ def start_metabase(repro_dir: str, version: str, port: int | None = None) -> str
     if os.path.exists(config_file):
         env["MB_CONFIG_FILE_PATH"] = config_file
 
-    # Use clojure with JAR on classpath + :dev:ee:ee-dev for test/dev deps
-    # -Sdeps requires EDN format (not JSON) — keys must be :keywords
-    sdeps = f'{{:extra-paths ["{jar_path}"]}}'
+    # Compute classpath from worktree deps, then append the JAR.
+    # tools.deps :extra-paths and :local/root don't work for plain JARs,
+    # so we resolve the classpath separately and launch with java -cp.
+    cp_result = subprocess.run(
+        ["clojure", "-Spath", "-A:dev:ee:ee-dev"],
+        capture_output=True, text=True, cwd=source_dir, env=env,
+    )
+    if cp_result.returncode != 0:
+        return f"ERROR: Failed to compute classpath:\n{cp_result.stderr}"
+    base_cp = cp_result.stdout.strip()
+    full_cp = f"{jar_path}:{base_cp}"
+
     cmd = [
-        "clojure",
-        "-Sdeps", sdeps,
-        "-A:dev:ee:ee-dev",
-        f"-J-Dclojure.server.repl={{:port {repl_port} :accept clojure.core.server/repl}}",
-        "-M", "-m", "metabase.core",
+        "java",
+        f"-Dclojure.server.repl={{:port {repl_port} :accept clojure.core.server/repl}}",
+        "-cp", full_cp,
+        "clojure.main", "-m", "metabase.core",
     ]
 
     with open(log_path, "w") as log_file:
