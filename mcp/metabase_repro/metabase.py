@@ -281,7 +281,14 @@ def start_metabase(repro_dir: str, version: str, port: int | None = None) -> str
     if cp_result.returncode != 0:
         return f"ERROR: Failed to compute classpath:\n{cp_result.stderr}"
     base_cp = cp_result.stdout.strip()
-    full_cp = f"{jar_path}:{base_cp}"
+    # Filter out the worktree's resources/ dir to avoid duplicate resource
+    # conflicts with the JAR (e.g. liquibase.yaml). The JAR already contains
+    # all production resources. Keep test_resources and library resource paths.
+    filtered_cp = ":".join(
+        p for p in base_cp.split(":")
+        if p not in ("resources", "resources/")
+    )
+    full_cp = f"{jar_path}:{filtered_cp}"
 
     main_class = _read_main_class(jar_path)
 
