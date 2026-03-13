@@ -33,6 +33,9 @@ def api_call(repro_dir: str, method: str, path: str,
     else:
         headers["x-api-key"] = "mb_adminapikey"
 
+    # Defensive: strip /api/ prefix if caller included it (common mistake)
+    if path.startswith("/api/"):
+        path = path[4:]
     url = f"http://localhost:{port}/api{path}"
 
     # Build request

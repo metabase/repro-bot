@@ -1,14 +1,40 @@
 """Test running: execute Clojure, Jest, or Cypress tests against a source worktree."""
 from __future__ import annotations
 
+import json
 import os
 import re
 
-from .core import repro_path, run, read_state_file
+from .core import repro_path, run, read_state_file, truncate_output
 from .repl import repl_eval as _repl_eval_fn
 
 
-def run_test(repro_dir: str, test_file: str, port: int | None = None) -> str:
+def _detect_pkg_manager(source_dir: str) -> str:
+    """Detect package manager from package.json. Returns 'bun' or 'yarn'."""
+    pkg_json = os.path.join(source_dir, "package.json")
+    try:
+        with open(pkg_json) as f:
+            data = json.load(f)
+        pm = data.get("packageManager", "")
+        if pm.startswith("bun"):
+            return "bun"
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+    return "yarn"
+
+
+def _node_env() -> dict[str, str] | None:
+    """Return env dict with NODE_BIN_DIR prepended to PATH, or None if not set."""
+    node_bin = os.environ.get("NODE_BIN_DIR")
+    if not node_bin:
+        return None
+    env = os.environ.copy()
+    env["PATH"] = f"{node_bin}:{env.get('PATH', '')}"
+    return env
+
+
+def run_test(repro_dir: str, test_file: str, port: int | None = None,
+             source_dir: str | None = None) -> str:
     """Run a single test file against the source worktree.
 
     Detects test type from the file extension:
@@ -17,11 +43,13 @@ def run_test(repro_dir: str, test_file: str, port: int | None = None) -> str:
     - .cy.spec.ts(x) → Cypress acceptance test
 
     Args:
-        repro_dir: Path to repro directory
+        repro_dir: Path to repro directory (used for port/REPL state)
         test_file: Path relative to source root (e.g. test/metabase/foo_test.clj)
         port: Metabase HTTP port (required for Clojure and Cypress tests)
+        source_dir: Override source directory (default: <repro_dir>/source)
     """
-    source_dir = repro_path(repro_dir, "source")
+    if source_dir is None:
+        source_dir = repro_path(repro_dir, "source")
 
     if not os.path.isdir(source_dir):
         return f"ERROR: Source worktree not found at {source_dir}"
@@ -47,26 +75,25 @@ def run_test(repro_dir: str, test_file: str, port: int | None = None) -> str:
 
 
 def _run_clojure_test(source_dir: str, test_file: str, port: int | None, repro_dir: str) -> str:
-    """Run a Clojure test via the socket REPL."""
-    if not port:
-        return "ERROR: Clojure tests require a running Metabase instance (need port for socket REPL)"
+    """Run a Clojure test via the REPL.
 
-    # Derive namespace: test/metabase/foo/bar_test.clj → metabase.foo.bar-test
+    Test/dev namespaces are already on the classpath when Metabase is started
+    via clj with :dev:ee:ee-dev aliases — no .addURL manipulation needed.
+    """
+    if not port:
+        return "ERROR: Clojure tests require a running Metabase instance"
+
+    # Derive namespace from test file path
     ns = test_file
-    ns = re.sub(r"^test/", "", ns)
+    if test_file.startswith("enterprise/"):
+        ns = re.sub(r"^enterprise/backend/test/", "", ns)
+    else:
+        ns = re.sub(r"^test/", "", ns)
     ns = re.sub(r"\.cljc?$", "", ns)
     ns = ns.replace("/", ".")
     ns = ns.replace("_", "-")
 
     clj_code = f"""
-(require '[clojure.java.io :as io])
-(let [cl (.getContextClassLoader (Thread/currentThread))
-      test-url (io/as-url (io/file "{source_dir}/test"))
-      dev-url  (io/as-url (io/file "{source_dir}/dev"))]
-  (when-not (some #{{test-url}} (seq (.getURLs cl)))
-    (.addURL cl test-url)
-    (.addURL cl dev-url)
-    (println "Added test/dev paths to classpath")))
 (require '{ns} :reload)
 (let [result (clojure.test/run-tests '{ns})]
   (when (pos? (+ (:fail result) (:error result)))
@@ -80,12 +107,17 @@ def _run_clojure_test(source_dir: str, test_file: str, port: int | None, repro_d
 
 def _run_jest_test(source_dir: str, test_file: str) -> str:
     """Run a Jest unit test."""
-    result = run(
-        ["yarn", "test-unit", f"--testPathPattern={test_file}"],
-        cwd=source_dir,
-        timeout=120,
-    )
-    return result.stdout + result.stderr
+    if not os.path.isdir(os.path.join(source_dir, "node_modules")):
+        return "ERROR: node_modules not found. Run 'yarn install' or 'bun install' in the source worktree first, or skip test execution and save the patch."
+
+    pkg_mgr = _detect_pkg_manager(source_dir)
+    if pkg_mgr == "bun":
+        cmd = ["bun", "run", "test-unit", f"--testPathPattern={test_file}"]
+    else:
+        cmd = ["yarn", "--ignore-engines", "test-unit", f"--testPathPattern={test_file}"]
+
+    result = run(cmd, cwd=source_dir, timeout=120, env=_node_env())
+    return truncate_output(result.stdout + result.stderr)
 
 
 def _run_cypress_test(source_dir: str, test_file: str, port: int | None) -> str:
@@ -93,13 +125,22 @@ def _run_cypress_test(source_dir: str, test_file: str, port: int | None) -> str:
     if not port:
         return "ERROR: Cypress tests require a port for the running Metabase instance"
 
+    if not os.path.isdir(os.path.join(source_dir, "node_modules")):
+        return "ERROR: node_modules not found. Run 'yarn install' or 'bun install' in the source worktree first, or skip test execution and save the patch."
+
     import subprocess
-    env = os.environ.copy()
+    env = _node_env() or os.environ.copy()
     env["CYPRESS_BASE_URL"] = f"http://localhost:{port}"
 
+    pkg_mgr = _detect_pkg_manager(source_dir)
+    if pkg_mgr == "bun":
+        cmd = ["bun", "run", "test-cypress-run", "--spec", test_file]
+    else:
+        cmd = ["yarn", "test-cypress-run", "--spec", test_file]
+
     result = subprocess.run(
-        ["yarn", "test-cypress-run", "--spec", test_file],
+        cmd,
         capture_output=True, text=True,
         cwd=source_dir, env=env, timeout=300,
     )
-    return result.stdout + result.stderr
+    return truncate_output(result.stdout + result.stderr)

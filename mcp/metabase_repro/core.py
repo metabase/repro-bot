@@ -83,7 +83,7 @@ def pick_port() -> int:
 
 
 def run(cmd: list[str], timeout: int = 300, cwd: str | None = None,
-        input_data: str | None = None) -> subprocess.CompletedProcess:
+        input_data: str | None = None, env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
     """Run a command from the project root (or specified cwd)."""
     return subprocess.run(
         cmd,
@@ -92,6 +92,7 @@ def run(cmd: list[str], timeout: int = 300, cwd: str | None = None,
         cwd=cwd or PROJECT_ROOT,
         timeout=timeout,
         input=input_data,
+        env=env,
     )
 
 
@@ -120,6 +121,25 @@ def is_pid_running(pid: int) -> bool:
         return True
     except (ProcessLookupError, PermissionError, ValueError):
         return False
+
+
+def truncate_output(text: str, max_chars: int = 8000) -> str:
+    """Truncate output to max_chars, keeping head and tail with a banner.
+
+    When truncated, the full output is saved to a temp file and the banner
+    includes the path so the agent can read it if needed.
+    """
+    if len(text) <= max_chars:
+        return text
+    import tempfile
+    fd, path = tempfile.mkstemp(prefix="repro-output-", suffix=".txt")
+    with os.fdopen(fd, "w") as f:
+        f.write(text)
+    keep = max_chars // 2
+    banner = (f"\n\n... ({len(text) - max_chars} chars truncated) ...\n"
+              f"Full output saved to: {path}\n"
+              f"Use the Read tool to view the full output if needed.\n\n")
+    return text[:keep] + banner + text[-keep:]
 
 
 def format_result(stdout: str = "", stderr: str = "", returncode: int = 0) -> str:

@@ -19,6 +19,7 @@ from . import git
 from . import preflight
 from . import repl
 from . import testing
+from . import browser
 
 mcp = FastMCP("metabase-repro")
 
@@ -68,8 +69,18 @@ def start_metabase(repro_dir: str, version: str, port: Optional[int] = None) -> 
 
 @mcp.tool()
 def stop_metabase(repro_dir: str) -> str:
-    """Stop a running Metabase instance, remove source worktree, and stop appdb."""
+    """Stop the Metabase process, preserving the database, env, and worktree.
+
+    Use cleanup() afterward to remove the worktree, stop appdb, and clear state."""
     return metabase.stop_metabase(repro_dir)
+
+
+@mcp.tool()
+def cleanup(repro_dir: str) -> str:
+    """Remove source worktree, stop appdb, and clear state for a repro directory.
+
+    Also stops Metabase if still running. Call this when done with an investigation."""
+    return metabase.cleanup(repro_dir)
 
 
 @mcp.tool()
@@ -139,22 +150,34 @@ def save_test_patch(repro_dir: str) -> str:
 
 
 @mcp.tool()
-def run_test(repro_dir: str, test_file: str, port: Optional[int] = None) -> str:
+def run_test(repro_dir: str, test_file: str, port: Optional[int] = None,
+             source_dir: Optional[str] = None) -> str:
     """Run a single test file against the source worktree.
 
     Auto-detects test type from extension:
     - .clj -> Clojure test via REPL
     - .unit.spec.ts(x) -> Jest
-    - .cy.spec.ts(x) -> Cypress"""
-    return testing.run_test(repro_dir, test_file, port)
+    - .cy.spec.ts(x) -> Cypress
+
+    Use source_dir to override the default <repro_dir>/source location
+    (e.g. to run tests from a different repro's worktree)."""
+    return testing.run_test(repro_dir, test_file, port, source_dir)
 
 
 @mcp.tool()
 def repl_eval(repro_dir: str, code: str, timeout: int = 30) -> str:
-    """Evaluate Clojure code against a running Metabase instance's socket REPL.
+    """Evaluate Clojure code against a running Metabase instance via nREPL.
 
-    The socket REPL is at port 3000 + HTTP_PORT. No nREPL required."""
+    Uses nREPL (via clj-nrepl-eval) when available, falls back to socket REPL."""
     return repl.repl_eval(repro_dir, code, timeout)
+
+
+@mcp.tool()
+def browser_snapshot(repro_dir: str, name: str = "") -> str:
+    """Take a page snapshot and save to file. Returns summary with interactive element refs.
+
+    Use Read tool on the saved YAML file to inspect full page structure."""
+    return browser.browser_snapshot(repro_dir, name)
 
 
 @mcp.tool()

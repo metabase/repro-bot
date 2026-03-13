@@ -105,6 +105,7 @@ def setup_worktree(repro_dir: str, version_ref: str) -> str:
 
         if current_ref == resolved_ref:
             messages.append(f"Worktree already at {resolved_ref}, reusing.")
+            _pre_resolve_dev_classpath(worktree_path, messages)
             return "\n".join(messages)
         else:
             messages.append(f"Worktree exists at {current_ref}, switching to {resolved_ref}...")
@@ -112,6 +113,7 @@ def setup_worktree(repro_dir: str, version_ref: str) -> str:
             if result.returncode != 0:
                 return f"ERROR switching worktree:\n{result.stderr}"
             messages.append(f"Worktree switched to {resolved_ref}")
+            _pre_resolve_dev_classpath(worktree_path, messages)
             return "\n".join(messages)
 
     messages.append(f"Creating worktree at {worktree_path} from {resolved_ref}...")
@@ -120,7 +122,31 @@ def setup_worktree(repro_dir: str, version_ref: str) -> str:
         return f"ERROR creating worktree:\n{result.stderr}"
 
     messages.append(f"Worktree ready at {worktree_path}")
+
+    # After worktree is ready, pre-resolve dev classpath (non-fatal)
+    _pre_resolve_dev_classpath(worktree_path, messages)
+
     return "\n".join(messages)
+
+
+def _pre_resolve_dev_classpath(source_dir: str, messages: list[str]):
+    """Pre-download :dev alias Maven deps so clj startup is fast."""
+    cache_marker = os.path.join(source_dir, ".dev-deps-resolved")
+    if os.path.exists(cache_marker):
+        messages.append("Dev dependencies already resolved.")
+        return
+    try:
+        result = run(["clojure", "-A:dev:ee:ee-dev", "-P"], cwd=source_dir, timeout=500)
+        if result.returncode == 0:
+            with open(cache_marker, "w") as f:
+                f.write("ok")
+            messages.append("Dev dependencies resolved.")
+        else:
+            messages.append(f"WARNING: Dev dep resolution failed: {result.stderr[:200]}")
+    except FileNotFoundError:
+        messages.append("WARNING: clojure not found — dev deps not pre-resolved.")
+    except Exception as e:
+        messages.append(f"WARNING: Dev dep resolution failed: {e}")
 
 
 def save_test_patch(repro_dir: str) -> str:

@@ -49,13 +49,6 @@ def check_setup() -> str:
         else:
             messages.append("OK: docker is available")
 
-    # --- clojure-eval (clojure-mcp-light) ---
-    if not shutil.which("clj-nrepl-eval"):
-        messages.append("MISSING: clj-nrepl-eval is not installed (install from https://github.com/bhauman/clojure-mcp-light)")
-        ok = False
-    else:
-        messages.append("OK: clj-nrepl-eval is installed")
-
     # --- Playwright CLI ---
     if shutil.which("playwright-cli"):
         messages.append("OK: playwright-cli is installed")

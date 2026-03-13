@@ -125,9 +125,11 @@ def create_env(repro_dir: str, db_type: str = "h2", appdb_port: str = "") -> str
 
     configs = {
         "h2": f'''{{:mb-run-mode "dev"
+ :metastore-dev-server-url "https://token-check.staging.metabase.com" 
  :mb-db-type "h2"
  :mb-db-file "{abs_repro}/metabase"}}''',
         "postgres": f'''{{:mb-run-mode "dev"
+ :metastore-dev-server-url "https://token-check.staging.metabase.com"
  :mb-db-type "postgres"
  :mb-db-host "localhost"
  :mb-db-port "{appdb_port}"
@@ -142,6 +144,7 @@ def create_env(repro_dir: str, db_type: str = "h2", appdb_port: str = "") -> str
  :mb-db-user "metabase"
  :mb-db-pass "metabase"}}''',
         "mariadb": f'''{{:mb-run-mode "dev"
+ :metastore-dev-server-url "https://token-check.staging.metabase.com"
  :mb-db-type "mysql"
  :mb-db-host "localhost"
  :mb-db-port "{appdb_port}"

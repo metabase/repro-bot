@@ -5,3 +5,5 @@ downloads/
 *.iml
 plugins/
 .playwright-mcp/
+.playwright
+.playwright-cli

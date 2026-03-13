@@ -10,436 +10,260 @@ Examples:
 - `/repro https://github.com/metabase/metabase/issues/12345`
 - `/repro MB-12345`
 
-> **Note**: Do not commit any changes. The worktree is ephemeral — any source edits made during investigation (e.g. adding debug logging) should be discarded when the worktree is removed in Phase 7.
+## Rules
+- **No commits**: The worktree is ephemeral — discard any source edits when the worktree is removed in Phase 7.
+- **MCP tools only**: Use `mcp__metabase-repro__*` for ALL Metabase ops. Never raw Bash (curl, java, docker). `curl` is not available — use `api_call`. If any MCP tool fails (connection error OR output error like "auto-setup failed"), **STOP immediately** and report the exact error.
+- **No clojure CLI**: Use `repl_eval` or `run_test`. Never `clojure -M/-X` (wastes 30-60s per invocation).
+- **Local code search only**: Grep/Glob against `./repro/` worktrees. Never `gh search code`.
+- **No subagents for code search**: Direct Grep (~100 tokens) vs subagent (50K-100K tokens).
+- **Browser**: `playwright-cli` via Bash. Never `mcp__playwright__*`. See `.claude/skills/playwright-cli/SKILL.md`.
+- **Linear**: Call `mcp__linear-server__*` tools directly, not via subagents (subagents can't access MCP tools).
+- **No web search**: Never use WebSearch/WebFetch for issue details. All data from `gh` CLI or Linear MCP.
+- **File reads**: Read whole files or large 500+ line chunks — never scan in 60-line windows. Anti-pattern: reading the same file 5+ times with small offsets. Read the whole file once.
+- **File searches**: Never search outside `./repro/`. Never `find /` or search the home directory.
+- **Git commands**: Use `git -C <path>` instead of `cd <path> && git ...`.
+- **Parallelism**: ALWAYS batch independent tool calls in the same turn. Saves 30%+ on turns. Common parallel batches: multiple Grep calls, `git log` + `git show`, independent `repl_eval` calls, `setup_worktree` + `start_appdb`.
+- **No `wait-for-selector`**: `playwright-cli` does NOT have a `wait-for-selector` command. Use `snapshot` + `click` instead.
+- **Time budget**: ~25 min total. Prioritize reproduction over exploration.
 
-> **CRITICAL**: Use `mcp__metabase-repro__*` MCP tools for ALL Metabase operations (starting/stopping instances, API calls, worktree management, test running). These tools handle state management, authentication, and process lifecycle automatically — no shell scripts needed. **NEVER fall back to raw Bash** (curl, java -jar, docker run, etc.) for any operation that an MCP tool handles. If any `mcp__metabase-repro__*` tool fails — whether with a connection/server error OR an error in its output (e.g. "auto-setup failed", "could not obtain session token") — **STOP the entire /repro workflow immediately** and report the exact error to the user so the MCP server code can be fixed. Do NOT attempt to work around MCP tool failures with manual curl/bash commands.
+> **MCP tool schemas**: At the **start of the run**, pre-fetch all MCP tool schemas in a single `ToolSearch` call: `select:mcp__metabase-repro__check_setup,mcp__metabase-repro__setup_master_worktree,mcp__metabase-repro__setup_worktree,mcp__metabase-repro__start_appdb,mcp__metabase-repro__start_metabase,mcp__metabase-repro__stop_metabase,mcp__metabase-repro__api_call,mcp__metabase-repro__get_session_token,mcp__metabase-repro__repl_eval,mcp__metabase-repro__run_test,mcp__metabase-repro__save_test_patch,mcp__metabase-repro__cleanup,mcp__metabase-repro__get_status,mcp__metabase-repro__browser_snapshot,mcp__linear-server__list_issues,mcp__linear-server__list_comments,mcp__linear-server__get_issue,mcp__linear-server__save_comment,mcp__linear-server__save_issue,mcp__linear-server__list_issue_labels,mcp__linear-server__create_attachment`. Do NOT fetch schemas one-at-a-time.
 
-> **Browser automation**: Use `playwright-cli` (installed as a Claude Code skill) for all browser automation. Run commands via the Bash tool (e.g. `playwright-cli goto https://...`). Do NOT use playwright-cli tools (`mcp__playwright__*`) — they are not configured. See the skill documentation at `.claude/skills/playwright-cli/SKILL.md` for the full command reference.
-
-> **Tooling assumption**: The Linear MCP tools (`mcp__plugin_productivity_linear__*`) are already connected and authenticated. Call them directly from the main agent — do NOT delegate Linear MCP calls to subagents (Task tool), as subagents cannot access MCP tools. Do not search for a Linear CLI, check for API keys, or verify authentication. If a Linear MCP call fails, report the error and move on.
-
-> **Source exploration**: NEVER use Task/Explore agents for code analysis. Use direct Grep calls — they cost ~100 tokens vs 50K-100K for a subagent. Start with targeted Grep searches (specific component/function names). Multiple sequential Grep calls are always cheaper than a single Explore agent.
-
-> **File searches**: NEVER search outside the project directory. Always scope Grep/Glob/find to `./repro/` or specific subdirectories. Never use `find /` or search the home directory — it wastes turns and triggers permission prompts.
-
-> **Code search**: ALWAYS search Metabase source code using Grep/Glob against local worktrees (`./repro/master/`, `./repro/<ISSUE-ID>/source/`). NEVER use `gh api search/code` or `gh search code` — these GitHub code search APIs are slow, rate-limited, and return incomplete results.
+> **CI mode**: When `GITHUB_ACTIONS_RUN_URL` is set, this runs in GitHub Actions CI. On catastrophic failure (MCP errors, startup failures, unrecoverable errors), post to Linear before stopping:
+> ```markdown
+> ## Repro-Bot CI Failure
+> **Phase**: <phase number and name>
+> **Error**: <exact error message>
+> **CI Run**: [View logs](${GITHUB_ACTIONS_RUN_URL})
+>
+> <Additional context about what was attempted>
+> ```
+> If a Linear issue ID has been resolved, post to that issue. Otherwise log to console. SUGGESTIONS.md should still be written even if reproduction failed.
 
 ---
 
 ## Phase 0: Pre-flight Check
 
-Run this **before anything else** — before fetching issues, before any MCP calls. If it fails, stop immediately.
-
 ```
 mcp__metabase-repro__check_setup()
 ```
 
-If this tool call itself fails with "No such tool available", the MCP server may still be initializing. **Wait 5 seconds and retry once.** If it fails a second time with the same error, **STOP immediately** and tell the user: "The metabase-repro MCP server is not available. Please check `.mcp.json` and restart it before running /repro."
+If this fails with "No such tool available", wait 5 seconds and retry once. If it fails again, STOP: "The metabase-repro MCP server is not available." If it reports missing items, STOP — the user will fix before re-running.
 
-If it fails with a different error (connection refused, server crashed, etc.), **STOP immediately** with the same message — no retry needed.
-
-If the check reports missing items, **STOP the entire /repro workflow immediately.** Do NOT continue to any subsequent steps. Do NOT attempt to diagnose, work around, or check individual components yourself — the user will fix the issue before re-running.
-
-### Verify Playwright CLI
-
-After pre-flight passes, verify `playwright-cli` is available by running:
+Then verify playwright-cli:
 ```bash
 playwright-cli --version
 ```
-
-If this fails, **STOP immediately** and tell the user: "playwright-cli is not available. Run `npm install -g @playwright/cli@latest && playwright-cli install --skills` and restart before running /repro. Playwright is required for reproducing frontend issues."
-
-Do NOT continue with a code-analysis-only approach — Playwright is a hard requirement.
+If missing, STOP: "Run `npm install -g @playwright/cli@latest && playwright-cli install --skills`."
 
 ---
 
 ## Phase 1: Input Routing
 
-Determine input type and fetch issue data:
-
-**GitHub URL** (matches `https://github.com/metabase/metabase/issues/\d+`):
+**GitHub URL** (`https://github.com/metabase/metabase/issues/\d+`):
 ```bash
 gh issue view <ISSUE_NUM> --repo metabase/metabase --json number,title,body,labels,state
 ```
-Then search Linear for the linked issue via `mcp__plugin_productivity_linear__list_issues`.
+Then search Linear: `mcp__linear-server__list_issues` matching issue number or title keywords.
 
-**Linear ID** (matches `[A-Z]+-\d+`, e.g. `MB-1234`):
+**Linear ID** (`[A-Z]+-\d+`):
 ```
-mcp__plugin_productivity_linear__get_issue(id: "<LINEAR-ID>")
+mcp__linear-server__get_issue(id: "<LINEAR-ID>")
 ```
-Linear already syncs the full GitHub issue body — do NOT separately call `gh issue view`. Just extract the GitHub URL from the Linear issue description or attachments for use in the final report.
+Linear syncs the full GitHub body — do NOT separately call `gh issue view`.
 
-**Cross-link resolution**:
-- If starting from GitHub: search Linear for a linked issue via `mcp__plugin_productivity_linear__list_issues` with a query matching the GitHub issue number or title keywords. Also check the GitHub issue body/comments for a Linear link.
-- If starting from Linear: extract the GitHub URL from the issue description or attachments. Do NOT fetch GitHub separately — Linear has all the content.
+**Cross-link resolution**: Resolve both GitHub and Linear identifiers before proceeding.
 
-Resolve both GitHub and Linear identifiers before proceeding.
+> **REQUIRED**: A linked Linear issue is **mandatory**. If none found, STOP: "No linked Linear issue found. Please create or link one before running /repro." In CI mode, log to console.
 
-> **IMPORTANT**: NEVER use web search (WebSearch, WebFetch) to look up issue details. All issue data must come from the `gh` CLI (for GitHub) or Linear MCP tools (for Linear). If both fail, stop and report the error to the user — do not fall back to searching the web.
-
-**Fetch all comments from Linear** (Linear mirrors GitHub comments, plus may have additional Linear-only comments):
+**Fetch all comments** (Linear mirrors GitHub comments):
 ```
-mcp__plugin_productivity_linear__list_comments(issueId: "<LINEAR-ID>")
+mcp__linear-server__list_comments(issueId: "<LINEAR-ID>")
 ```
-This is the primary source for all comment data — no need to separately fetch GitHub comments.
+IMPORTANT: Ignore previous Repro-Bot Investigation comments.
 
 ---
 
 ## Phase 2: Issue Parsing
 
-Extract from **the issue body and all Linear comments** (which include synced GitHub comments plus any Linear-only discussion):
-- Steps to reproduce (comments may refine or correct the original steps)
-- Expected vs. actual behavior
-- Environment and version info (e.g. "Metabase 1.50.2", "v0.50.2", "version 50")
-- Stack traces or API endpoints mentioned
-- DB driver specifics (Postgres, MySQL, H2, etc.)
-- Workarounds or additional context from comments
-- Developer/maintainer notes hinting at root cause
+Extract from the issue body and all Linear comments:
+- Steps to reproduce, expected vs. actual behavior
+- Version info (e.g. "Metabase 1.50.2", "v0.50.2", "version 50")
+- Stack traces, API endpoints, DB driver specifics
+- Workarounds, developer notes hinting at root cause
 
-**Classify the issue**:
-- **Frontend-heavy**: mentions specific UI elements, screenshots only, no API/SQL → primary strategy: Playwright
-- **Backend-heavy**: stack traces, SQL, query results, data correctness → primary strategy: REPL or API calls
+**Classify**:
+- **Frontend-heavy**: UI elements, screenshots → primary: Playwright
+- **Backend-heavy**: stack traces, SQL, data correctness → primary: REPL or API
 - **Mixed**: use both
+- **Upgrade/conversion**: version switch → see Phase 4
 
-**Detect application database requirements**: Scan the issue body and comments for signs that the bug requires a non-H2 application database:
-- Phrases: "application database", "appdb", "app-db", "app db", "MB_DB_TYPE=postgres", "MB_DB_TYPE=mysql", "MB_DB_TYPE=mariadb"
-- Stack traces with `org.postgresql` or `com.mysql` or `org.mariadb` errors in Metabase system tables (e.g. `core_user`, `report_card`, `metabase_database` — NOT data warehouse tables)
-- Explicit mentions of running Metabase with Postgres/MySQL/MariaDB as the backing store
+**Detect appdb type** (default: Postgres):
+- **H2 only if**: issue explicitly mentions H2/embedded database/MB_DB_TYPE=h2
+- **MySQL/MariaDB only if**: issue explicitly mentions as appdb
+- Distinguish **appdb** (Metabase metadata) from **data warehouse** (user data)
 
-**Important**: Distinguish **application database** (where Metabase stores its own metadata) from **data warehouse** (databases users connect to query their data). Only appdb mentions trigger Docker-based database setup. Data warehouse requirements remain blockers (see below).
+**External system dependencies**: If the issue needs infrastructure beyond a local Metabase (remote DBs as data warehouse, LDAP/SAML, SMTP, S3, etc.), skip to Phase 6 with INCONCLUSIVE. **Not blockers**: Postgres/MySQL/MariaDB as appdb (supported via Docker).
 
-If an appdb type is detected (postgres, mysql, or mariadb), note it for Phase 3 — Docker will be used to provide it.
-
-**Check for external system dependencies**: If the issue requires infrastructure beyond a local Metabase instance, **stop before attempting reproduction**. Post an INCONCLUSIVE report explaining what external systems are needed. Examples of blockers:
-- Remote databases (Postgres, MySQL, BigQuery, Redshift, Snowflake, etc.) as the **data warehouse**
-- LDAP / SAML / SSO identity providers
-- SMTP mail server (for subscription/alert issues)
-- Git-based serialization remote
-- S3 or other object storage
-- Specific Docker or Kubernetes setups
-- Load balancers or reverse proxies
-
-**NOT blockers** (supported via Docker):
-- Postgres, MySQL, or MariaDB as the **application database** (appdb)
-
-> **Exception**: If the external system is only needed to create timing conditions (e.g., `pg_sleep` for simulating slow queries), the issue may still be investigable via code analysis. Note the limitation and proceed to Phase 4. The issue can be REPRODUCED via code analysis if the root cause is identifiable from source code without requiring runtime timing verification.
-
-Do not attempt to set up external data warehouses or other external systems. Skip directly to Phase 6 with status INCONCLUSIVE and note the required infrastructure.
+> **Exception**: If external system is only needed for timing conditions (e.g. `pg_sleep`), proceed with code analysis. Can be REPRODUCED via code analysis if root cause is identifiable from source.
 
 ---
 
 ## Phase 3: Start Fresh Metabase Instance
 
 ### Set Up Master Worktree
-
-Ensure the persistent master worktree exists and is up to date. This provides the `bin/mage` script used for all JAR downloads/runs, and serves as a reference for comparing current code against the issue's version.
-
 ```
 mcp__metabase-repro__setup_master_worktree()
 ```
 
 ### Determine Version
 
-`mage jar-download` (run from the master worktree) handles version resolution natively. Determine the version string to pass from the issue:
-
-| Issue says | Pass to tools | What mage does |
-|------------|-------------|----------------|
+| Issue says | Pass to tools | What happens |
+|------------|-------------|--------------|
 | `v1.50.2` or `1.50.2` | `1.50.2` | Downloads EE v1.50.2 |
 | `v0.50.2` or `0.50.2` | `0.50.2` | Downloads OSS v0.50.2 |
-| `version 50` or just `50` | `50` | Queries GitHub releases for latest `1.50.x` EE |
-| No version mentioned | *latest stable* | Query `gh release list --repo metabase/metabase -L 5` to find the latest `v1.x.y` release, then use that version number (e.g. `1.52.3`). Do NOT use `master` — master builds cannot be downloaded via `mage jar-download`. |
+| `version 50` or `50` | `50` | Queries GitHub for latest `1.50.x` EE |
+| No version | *latest stable* | `gh release list --repo metabase/metabase -L 5` → use latest `v1.x.y`. Never `master`. |
 
-**Edition heuristic** (only needed when the issue says a bare version like "50"):
-- Default to **EE** (`1.x.y`) — `mage` does this automatically when given a bare number like `50`
-- Use **OSS** (`0.x.y`) only if the issue explicitly mentions "OSS" or "open source" or uses a `v0.x.y` version
+Default to **EE** (`1.x.y`). Use **OSS** (`0.x.y`) only if issue says "OSS" or uses `v0.x.y`.
 
-No manual git tag resolution is needed — mage handles it all.
-
-### Set Up Isolated Repro Directory and Source Worktree
-
-Each run gets a fresh git worktree. The worktree provides source code at the issue's version for reading/grepping during investigation. It does NOT compile Metabase.
+### Set Up Worktree and Appdb
 
 ```
 mcp__metabase-repro__setup_worktree(repro_dir="repro/<ISSUE-ID>", version_ref="v1.50.2")
 ```
 
-For `version_ref`, use the git tag matching the version (e.g. `v1.50.2`). If no version was specified in the issue, use the tag for the latest stable release.
+`setup_worktree` auto-normalizes EE→OSS tags and fetches missing tags.
 
-> **Tag resolution**: `setup_worktree` auto-normalizes EE tags (`v1.x.y` → `v0.x.y`) and fetches missing tags automatically. No manual git fetch needed.
-
-### Start Application Database (if needed)
-
-**If an appdb type was detected in Phase 2** (postgres, mysql, or mariadb):
-
+**Default (Postgres)**: Start appdb then create env:
 ```
-mcp__metabase-repro__start_appdb(repro_dir="repro/<ISSUE-ID>", db_type="<DB_TYPE>")
+mcp__metabase-repro__start_appdb(repro_dir="repro/<ISSUE-ID>", db_type="postgres")
+mcp__metabase-repro__create_env(repro_dir="repro/<ISSUE-ID>", db_type="postgres")
 ```
 
-Then create the env file:
-```
-mcp__metabase-repro__create_env(repro_dir="repro/<ISSUE-ID>", db_type="<DB_TYPE>")
-```
-The appdb port is read from state files automatically.
-
-**If no appdb requirement was detected** (default H2), the env file is created automatically by `start_metabase`.
+**H2**: Skip `start_appdb` — env is created automatically by `start_metabase`.
 
 ### Start Metabase
 
-This single tool orchestrates everything: JAR download, env file creation (if not already done), startup, health check, auto-setup (EE/OSS), and session token acquisition.
+> **IMPORTANT**: `setup_worktree` MUST complete before `start_metabase` so test/dev
+> namespaces are on the classpath. Do NOT parallelize these two calls.
 
 ```
 mcp__metabase-repro__start_metabase(repro_dir="repro/<ISSUE-ID>", version="<VERSION>")
 ```
 
-The tool output tells you:
-- Edition (EE or OSS)
-- Port number
-- Credentials (crowberto@metabase.com / blackjet or 1Blackjet!)
-- Session token
+Output includes: edition, port, credentials, session token, nREPL port. Never use `java -jar` directly.
 
-> **IMPORTANT**: Never try to start Metabase directly via `java -jar` as a fallback. The MCP tool handles env vars, config files, REPL port setup, and OSS auto-setup.
-
-### Verify REPL Connection
-
-After Metabase starts, verify the socket REPL is reachable using the `repl_eval` MCP tool:
+### Verify REPL
 ```
 mcp__metabase-repro__repl_eval(repro_dir="repro/<ISSUE-ID>", code="(+ 1 2 3)")
 ```
-Expected: `6`. If it returns an error, check `./repro/<ISSUE-ID>/metabase.log` for errors.
+Expected: `6`.
 
-### Pre-Configured Users and API Keys
+### Pre-Configured Users
 
-**Check `start_metabase` output** to determine which setup path was used:
+**EE** (`1.x.y`): `crowberto@metabase.com` / `blackjet` (admin), `rasta@metabase.com` / `blueberries` (user). API keys: `mb_adminapikey`, `mb_userapikey`.
 
-**EE jars** (version `1.x.y`) — `mage jar-download --run` uses a config file that auto-sets up:
+**OSS** (`0.x.y`): `crowberto@metabase.com` / `1Blackjet!` (admin). No API keys.
 
-| User | Password | Role |
-|------|----------|------|
-| `crowberto@metabase.com` | `blackjet` | Superuser (admin) |
-| `rasta@metabase.com` | `blueberries` | Regular user |
-
-Pre-created API keys: `mb_adminapikey` (admin), `mb_userapikey` (all-users).
-
-**OSS jars** (version `0.x.y`) — auto-runs `/api/setup`:
-
-| User | Password | Role |
-|------|----------|------|
-| `crowberto@metabase.com` | `1Blackjet!` | Superuser (admin) |
-
-No pre-created API keys or secondary users for OSS. Use session token for API calls.
-
-### Check Setup Token (if needed)
-
-If you suspect the instance wasn't set up properly:
-```
-mcp__metabase-repro__check_setup_token(repro_dir="repro/<ISSUE-ID>")
-```
-
-### Refresh Session Token (if needed)
-
-`start_metabase` automatically saves the session token. If it expires:
-```
-mcp__metabase-repro__get_session_token(repro_dir="repro/<ISSUE-ID>")
-```
-
-> Note: JAR download + first startup typically takes 1–3 minutes.
+If setup seems wrong: `check_setup_token`. If token expires: `get_session_token`.
 
 ---
 
 ## Phase 4: Reproduction (max 3 attempts)
 
-Select strategy based on issue classification. Strategies can be combined within one attempt.
+> **Primary goal**: Reproduce (or confirm not reproducible) the reported behavior. Root cause is nice-to-have — don't spend more than ~5 extra minutes on it.
+
+Invoke the `metabase-reference` skill for REPL recipes, API patterns, domain quirks, and edge case handling.
 
 ### Strategy Selection
 
 | Issue Type | Primary Strategy |
 |------------|-----------------|
 | UI / frontend behavior | **playwright-cli** + **REPL** for data setup |
-| Setup steps described in issue | **REPL** for data setup, **Playwright** for UI verification |
-| API / endpoint behavior | **REPL** (invoke handler functions directly) or MCP `api_call` |
+| Setup steps in issue | **REPL** for data setup, **Playwright** for UI verification |
+| API / endpoint behavior | **REPL** (invoke handlers directly) or MCP `api_call` (note: `path` should NOT include `/api/` — it's prepended automatically, e.g. `path="/collection/root"`) |
 | Query results / SQL generation | **REPL**: `qp/process-query` or `qp.compile/compile` |
-| Wrong data / DB state | **REPL**: `t2/select` to inspect, compare expected vs actual |
-| Permissions / auth flows | **REPL**: inspect/modify permission groups + **Playwright** for UI |
-| Data model / metadata | **REPL**: `t2/select-one :model/Table` |
-| Code logic / edge case | **REPL**: read source then invoke functions directly |
-| Checking if bug is fixed | Compare source + **REPL** to test both versions' behavior |
+| Wrong data / DB state | **REPL**: `t2/select` to inspect |
+| Permissions / auth flows | **REPL** + **Playwright** |
+| Code logic / edge case | **REPL**: read source then invoke functions |
+| Checking if fixed | Compare source + **REPL** to test both versions |
 
-> **H2 slow query limitation**: H2 does not have `pg_sleep()`. For timing-dependent issues requiring slow queries, skip browser reproduction of the timing aspect and use code analysis instead. Cross-joins (e.g., `SYSTEM_RANGE(1,N) a, SYSTEM_RANGE(1,N) b`) are impractical for controlled delays in H2.
+> **Code analysis budget**: When investigating via code analysis, compare the buggy version's source with master in at most 10-12 targeted file reads. Do NOT trace full git history — if the bug is clear from source comparison, that's sufficient evidence. Save git archaeology for ambiguous cases.
 
-> **REPL-first approach**: Prefer the REPL over API calls for data setup and state inspection. The REPL is faster (no HTTP overhead), more expressive (full Clojure), and gives direct access to internals. Use API calls only when testing the HTTP layer specifically. Use Playwright only for visual/UI verification.
+> **Backend bugs**: For backend-classified bugs, limit Playwright to 1-2 screenshots for evidence. Do NOT iterate on UI reproduction if REPL already confirmed the bug.
 
-> **Source worktree path**: The source code for the issue's version is at `./repro/<ISSUE-ID>/source/` (NOT `./repro/<ISSUE-ID>/`). The repro directory `./repro/<ISSUE-ID>/` contains H2 DB, logs, env file, and the `playwright/` screenshot directory — source is always in the `source/` subdirectory.
+> **Timing / race-condition bugs**: If reproduction requires simulating slow API responses or race conditions that can't be triggered locally, proceed with code analysis. Note in report that root cause is confirmed via code review but not empirically observable in a single-instance environment.
 
-> **Codebase guidance**: Both `./repro/<ISSUE-ID>/source/` and `./repro/master/` contain a `CLAUDE.md` file with detailed instructions for navigating the Metabase codebase — read it when exploring source code. It documents conventions, key directories, and patterns that will help you find what you need faster.
+> **Time-series bugs**: Test at multiple data densities: ~12 points (monthly/1yr), ~36 (monthly/3yr), ~60 (monthly/5yr). Bug often manifests at specific density where ECharts switches interval logic.
+
+### Upgrade / Version-Switch Scenarios
+
+1. Start initial version via `start_metabase`, set up state
+2. Note the port, `stop_metabase(repro_dir="repro/<ISSUE-ID>")`
+3. `start_metabase(repro_dir="repro/<ISSUE-ID>", version="<NEW>", port=<SAME>)`
+4. Metabase runs migrations automatically. Repeat to switch multiple times.
 
 ### Browser Automation (playwright-cli)
 
-Use `playwright-cli` via the Bash tool for all browser automation. After logging in, navigate directly to the target page — do NOT snapshot intermediate pages (home, browse) unless they're part of the reproduction.
-
 **Token reduction rules**:
-- Prefer `playwright-cli screenshot` over `playwright-cli snapshot` for verification — screenshots have a fixed token cost, while snapshots of complex pages (especially data tables, pivot tables) can be unbounded
-- **Never** snapshot pivot tables or large data views — use the API to verify data correctness instead
-- Use API calls (`POST /api/card`, `POST /api/dataset`) to create questions, apply filters, and set up state — reserve Playwright only for final visual verification of the bug
-- Navigate directly to `/question/<ID>` or `/dashboard/<ID>` instead of clicking through menus
-- Only use `playwright-cli snapshot` when you need to find a specific interactive element (button, input field) to click
+- Create questions/dashboards/data via API or REPL — NEVER use Playwright for creation UIs
+- Navigate directly to `/question/<ID>` or `/dashboard/<ID>`
+- **Snapshot via MCP tool**: Use `mcp__metabase-repro__browser_snapshot(repro_dir="repro/<ISSUE-ID>", name="descriptive-name")` instead of `playwright-cli snapshot` via Bash. The MCP tool saves full YAML to file and returns only a compact summary with interactive element refs — keeping large YAML out of context. Use `Read` on the saved YAML file when you need full page structure. NEVER use `playwright-cli snapshot` directly via Bash. NEVER snapshot pivot tables, large data views, or home page.
+- NEVER use `&` (background) with playwright-cli
 
-**Commands** (use the port from `start_metabase` output):
+**Login and navigate** (use port from `start_metabase`):
 ```bash
-# Open browser and navigate
 playwright-cli open http://localhost:<PORT>/auth/login
-# Take a snapshot to get element refs
-playwright-cli snapshot
-# Fill form fields using refs from snapshot
-playwright-cli fill <ref> "value"
-# Click elements using refs from snapshot
-playwright-cli click <ref>
-# Navigate to a new URL
+playwright-cli cookie-set metabase.SESSION "<session-token>" --domain=localhost
 playwright-cli goto http://localhost:<PORT>/question/1
-# Take screenshot — save to repro dir
 playwright-cli screenshot --filename=./repro/<ISSUE-ID>/playwright/screenshot.png
-# Close browser when done
-playwright-cli close
 ```
 
-**Login shortcut**: After opening the login page, take a snapshot to get element refs, then fill the email and password fields and click the sign-in button. Check `start_metabase` output for the password: `blackjet` for EE, `1Blackjet!` for OSS.
+Get session token from `get_session_token` or read `./repro/<ISSUE-ID>/session-token`.
 
-**Avoid snapshot after login**: The sign-in click navigates to the home page which has a very large DOM. Do NOT snapshot the home page. Instead, immediately `playwright-cli goto` the target URL (e.g. `/question/<ID>`, `/dashboard/<ID>`).
+> **"Start exploring" modal**: Metabase shows this on first native question view. Snapshot to find button ref and click to dismiss.
 
-**"Start exploring" modal**: Metabase shows a "Start exploring" modal when viewing a saved native question for the first time. Be prepared for an extra click to dismiss it — snapshot to find the button ref and click it.
+> **Chart interaction**: Hover on the img element ref from snapshot for tooltips. Check bottom of snapshot YAML for tooltip table rows.
 
-**Chart interaction**: Metabase charts use `[data-testid="visualization-root"]` as the container. To hover over chart elements, use `playwright-cli run-code` with Playwright page API calls to get bounding boxes and move the mouse. Use `page.waitForTimeout(ms)` (not `setTimeout`) for delays in run-code.
+> **playwright-cli single expressions**: `run-code` takes one expression — no semicolons. Use separate calls or shell `&&`.
+
+> **playwright-cli resize**: Use `playwright-cli resize <w> <h>`, not `run-code` with `page.setViewportSize()`.
+
+> **playwright-cli network**: `network` accumulates ALL requests since page load, not just recent ones. Output grows over time.
 
 ### REPL Access (repl_eval MCP tool)
 
-> **NEVER use `clojure` CLI, `clojure -M`, or `clojure -X`. ALWAYS use the `repl_eval` MCP tool or `mcp__metabase-repro__run_test`. Starting a fresh JVM wastes 30-60 seconds per invocation.**
-
-The REPL is the **primary investigation tool** — prefer it over API calls for data setup, state inspection, and root cause exploration. Use the `repl_eval` MCP tool which connects directly to the socket REPL:
+The REPL is the **primary investigation tool**. After a timeout, skip arithmetic pings — just send your next command.
 
 ```
 mcp__metabase-repro__repl_eval(repro_dir="repro/<ISSUE-ID>", code="(require '[toucan2.core :as t2]) (t2/count :model/Database)")
 ```
 
-**When to use the REPL**:
-- **Before any API call**: Consider if the REPL is faster/more direct
-- **Data setup**: Use `t2/insert!` to create test data rather than clicking through UI
-- **State inspection**: Use `t2/select` to verify DB state after UI actions
-- **Query testing**: Use `qp/process-query` to test queries directly
-- **Root cause exploration**: Evaluate suspect functions with test inputs
-- **Environment modification**: Change settings, toggle features, modify data on-the-fly
+**REPL expression rules**: Send one expression per `repl_eval` call. Multi-expression evals frequently timeout. Split into separate (parallel if independent) calls.
 
-**Important**: The JAR runs production namespaces only. Test/dev namespaces (`metabase.test`, `dev`) are NOT on the classpath by default. Production namespaces available out of the box:
-- `toucan2.core` (as `t2`) — DB queries: `t2/select`, `t2/select-one`, `t2/insert!`
-- `metabase.query-processor` (as `qp`) — run queries end-to-end
-- `metabase.query-processor.compile` (as `qp.compile`) — compile to SQL only
+Test/dev namespaces (`metabase.test`, `dev`, enterprise test namespaces) are available natively on the classpath — no manual setup needed.
 
-### Common REPL Recipes
+> **REPL-first**: Prefer REPL over API calls for data setup and state inspection. Use API only when testing the HTTP layer.
 
-**Inspect database schema/tables**:
-```clojure
-(t2/select [:model/Table :id :name :db_id] :db_id 1)
-```
+> **Multi-schema setup**: If bug involves a picker that auto-hides with one schema (look for `useAutoSelectOnlyItem`), register the Postgres appdb as data warehouse via `POST /api/database`, then use REPL + `next.jdbc` to create schemas/tables.
 
-**Check current settings**:
-```clojure
-(t2/select-one :model/Setting :key "site-name")
-```
+> **CSV upload limitation**: `api_call` doesn't support multipart. Simulate uploads via REPL + `next.jdbc`.
 
-**Create a saved question via REPL** (faster than UI/API):
-```clojure
-(t2/insert-returning-instance! :model/Card
-  {:name "Test Question"
-   :database_id 1
-   :dataset_query {:database 1 :type :native :native {:query "SELECT 1"}}
-   :display :table
-   :visualization_settings {}
-   :creator_id 1
-   :collection_id nil})
-```
+> **Source worktree path**: Source code is at `./repro/<ISSUE-ID>/source/` (NOT `./repro/<ISSUE-ID>/`). The repro dir contains DB, logs, env, screenshots.
 
-**Run a query and inspect results**:
-```clojure
-(require '[metabase.query-processor :as qp])
-(qp/process-query {:database 1 :type :native :native {:query "SELECT * FROM ORDERS LIMIT 5"}})
-```
-
-**Toggle a feature flag**:
-```clojure
-(t2/update! :model/Setting :key "enable-pivoted-filters" {:value "true"})
-```
-
-**Check user permissions**:
-```clojure
-(t2/select :model/Permissions :group_id 1)
-```
-
-**Test query compilation**:
-```clojure
-(require '[metabase.query-processor.compile :as qp.compile])
-(qp.compile/compile {:database 1
-                     :type :query
-                     :query {:source-table 1
-                             :filter [:= [:field 1 nil] 42]}})
-```
-
-**Loading test/dev namespaces** (advanced — only if needed):
-Since the worktree has full source, you can add source paths to the running classpath:
-```clojure
-(require '[clojure.java.io :as io])
-(.addURL (.getContextClassLoader (Thread/currentThread))
-         (io/as-url (io/file "./repro/<ISSUE-ID>/source/test")))
-(.addURL (.getContextClassLoader (Thread/currentThread))
-         (io/as-url (io/file "./repro/<ISSUE-ID>/source/dev")))
-;; Now you can require test/dev namespaces:
-(require '[metabase.test :as mt])
-(require '[dev])
-```
-
-Key test/dev namespaces (after loading):
-- `metabase.test` (as `mt`) — `mt/user-http-request`, `mt/id`, `mt/with-temp`
-- `dev` — `dev/pprint-sql`, `dev/explain-query`
-
-### HTTP API Calls
-
-**Use the MCP `api_call` tool** for all API interactions — it handles authentication automatically:
-```
-mcp__metabase-repro__api_call(repro_dir="repro/<ISSUE-ID>", method="GET", path="/database")
-mcp__metabase-repro__api_call(repro_dir="repro/<ISSUE-ID>", method="GET", path="/database", jq_filter=".data[].name")
-mcp__metabase-repro__api_call(repro_dir="repro/<ISSUE-ID>", method="GET", path="/health")
-```
-
-For POST/PUT requests with JSON bodies:
-```
-mcp__metabase-repro__api_call(repro_dir="repro/<ISSUE-ID>", method="POST", path="/card", body='{"name":"test","dataset_query":{"database":1,"type":"native","native":{"query":"SELECT 1"}}}')
-```
-
-**Visualization settings format**: When setting `graph.tooltip_columns` or similar column-reference settings via API, values must use column reference format: `["[\"name\",\"COLUMN_NAME\"]"]`, not bare column names like `["COLUMN_NAME"]`.
-
-**Efficient schema discovery** — get all tables and fields in one call:
-```
-mcp__metabase-repro__api_call(repro_dir="repro/<ISSUE-ID>", method="GET", path="/database/1/metadata")
-```
-
-**Avoid large API responses**: Never call `/table` without a narrow jq_filter — it returns all system tables (400K+ chars). For field discovery, use:
-```
-api_call(method="GET", path="/database/1/fields", jq_filter="[.[] | select(.table_name == \"ORDERS\") | {id, name, table: .table_name}]")
-```
+> **Codebase guidance**: Both `./repro/<ISSUE-ID>/source/` and `./repro/master/` contain a `CLAUDE.md` with instructions for navigating the Metabase codebase.
 
 ### Documentation Reference
 
-When encountering Metabase-specific terminology (dashboards, questions, models, segments, metrics, subscriptions, etc.):
 ```
 WebFetch https://www.metabase.com/docs/latest/<relevant-section>
 ```
 
-Use web search for version-specific behavior, known issues, or unfamiliar error messages.
-
 ### After Each Attempt
 
-Evaluate:
-- What was tested
-- Actual result
-- Whether it matches the reported behavior
-- Self-critique: "Did I actually test the right thing?"
+Evaluate: what was tested, actual result, whether it matches reported behavior. Self-critique: "Did I test the right thing?"
+
+> **Code analysis as reproduction**: If the defective code path is unambiguously identified in source AND either (a) a fix exists in a newer version, or (b) the logic error is self-evident, classify as REPRODUCED (via code analysis). Note in the report that reproduction was via source review, not live testing.
 
 **Stop when**: REPRODUCED, NOT REPRODUCED, or after 3 inconclusive attempts → INCONCLUSIVE.
 
@@ -447,100 +271,11 @@ Evaluate:
 
 ## Phase 5: Write Failing Test
 
-> **Gate**: Only run this phase when the reproduction status is **REPRODUCED** AND a root cause hypothesis has been identified. If the status is NOT REPRODUCED, INCONCLUSIVE, or no root cause was found, skip to Phase 6.
+> **Gate**: Only if status is REPRODUCED. Otherwise skip to Phase 6.
 
-> **NEVER use `clojure` CLI, `clojure -M`, or `clojure -X`. ALWAYS use the `repl_eval` MCP tool or `mcp__metabase-repro__run_test`. Starting a fresh JVM wastes 30-60 seconds per invocation.**
+Invoke the `write-test` skill. Continue to Phase 6 after completion.
 
-> **Reference**: The `CLAUDE.md` file in `./repro/<ISSUE-ID>/source/` contains detailed instructions for writing and running both backend (Clojure) and frontend (TypeScript/Jest/Cypress) tests — including conventions, test locations, commands, and patterns. **Read it before writing any test.**
-
-### Determine Test Type
-
-Based on the issue classification from Phase 2 and the root cause, decide what kind of test to write. You may write **one or both**:
-
-| Bug Type | Test Type | Location |
-|----------|-----------|----------|
-| Backend logic, query processor, API | **Clojure unit test** | `test/metabase/...` |
-| Frontend UI behavior, rendering | **Jest unit/component test** | `frontend/test/...` or co-located `*.unit.spec.ts`/`*.unit.spec.tsx` |
-| End-to-end user workflow, UI interaction | **Cypress acceptance test** | `e2e/test/scenarios/...` |
-| Mixed (backend causes wrong data, frontend renders it wrong) | **Both** — Clojure test for the data bug + frontend/e2e test for the UI |
-
-### Find Relevant Test File
-
-Use the root cause hypothesis to identify the source file(s) involved, then locate the corresponding test file. Metabase mirrors source structure:
-
-**Backend (Clojure)**:
-
-| Source path | Test path |
-|------------|-----------|
-| `src/metabase/foo/bar.clj` | `test/metabase/foo/bar_test.clj` |
-| `src/metabase/foo/bar/baz.clj` | `test/metabase/foo/bar/baz_test.clj` |
-
-**Frontend (TypeScript)**:
-
-| Source path | Test path |
-|------------|-----------|
-| `frontend/src/metabase/foo/Bar.tsx` | `frontend/src/metabase/foo/Bar.unit.spec.tsx` (co-located) or `frontend/test/metabase/foo/Bar.unit.spec.tsx` |
-| UI workflow / interaction | `e2e/test/scenarios/<category>/foo.cy.spec.ts` |
-
-Use Grep to search for existing tests related to the buggy function/component. If no test file exists at the expected path, check for related test files in the same directory. Consult `CLAUDE.md` in the source worktree for the project's conventions on test file placement.
-
-### Choose Test Approach
-
-**Backend (Clojure)**:
-
-| Root Cause Type | Test Approach |
-|----------------|--------------|
-| Query processor bug | `mt/process-query` or `qp/process-query` |
-| API endpoint bug | `mt/user-http-request` |
-| Model / data bug | `mt/with-temp` + `t2/select` |
-| Pure logic / edge case | Direct function call with specific inputs |
-
-**Frontend (TypeScript)**:
-
-| Root Cause Type | Test Approach |
-|----------------|--------------|
-| Component rendering bug | Jest + React Testing Library — render component, assert DOM |
-| User interaction bug | Cypress — visit page, interact, assert visible result |
-| Data display / formatting | Jest unit test on the formatting/transform function |
-| State management bug | Jest — test reducer/action/selector with specific inputs |
-
-Look at existing tests in the identified test file for patterns to follow — imports, fixtures, helpers, assertion style.
-
-### Write the Test
-
-Add a new test to the appropriate test file in `./repro/<ISSUE-ID>/source/`. The test should:
-
-- **Be minimal** — only test the specific failing behavior
-- **Follow existing patterns** in the file (imports, fixtures, helpers, assertion style)
-- **Have a descriptive name** referencing the issue: e.g., Clojure: `(deftest issue-12345-test ...)`, Jest: `it("should handle X (issue #12345)")`, Cypress: `it("should not show X when Y (metabase#12345)")`
-- **Include a description** explaining the expected behavior (Clojure `testing` string, or descriptive `it`/`describe` text)
-- **Assert the correct/expected behavior** — the test should FAIL against the buggy code (since it asserts what _should_ happen, not what currently happens)
-
-### Run the Test
-
-Use the MCP tool which auto-detects the test type from the file extension:
-
-```
-mcp__metabase-repro__run_test(repro_dir="repro/<ISSUE-ID>", test_file="test/metabase/foo/bar_test.clj")
-```
-
-- **Clojure tests** (`.clj`): Connects to the running REPL (port 3000 + PORT), adds test/dev paths to the classpath automatically, requires the namespace, and runs the tests.
-- **Jest tests** (`.unit.spec.ts(x)`): Runs `yarn test-unit` in the source worktree.
-- **Cypress tests** (`.cy.spec.ts`): Runs `yarn test-cypress-run` with `CYPRESS_BASE_URL` set to the running instance.
-
-The tool reports whether the test **failed** (expected — demonstrates the bug) or **passed** (unexpected — test may not be targeting the bug correctly). If it passes, revisit the test logic.
-
-### Generate and Save Diff
-
-```
-mcp__metabase-repro__save_test_patch(repro_dir="repro/<ISSUE-ID>")
-```
-
-This captures all changes (including new untracked files) and saves them to `./repro/<ISSUE-ID>/test-diff.patch`.
-
-### If Test Writing Fails
-
-If you can't write a useful failing test (can't find the right file, test doesn't fail as expected, REPL errors, root cause is too vague), note the attempt and reason in the report but **do not block the workflow**. Move on to Phase 6.
+> **Error recovery**: If the `write-test` skill fails (permission denied, tool error, or any other failure), do NOT stop. Log the error, note "Failing test not written: <reason>" for the report, and **continue to Phase 6**. Phase 5 failure must never prevent Phases 6-8 from running.
 
 ---
 
@@ -548,10 +283,9 @@ If you can't write a useful failing test (can't find the right file, test doesn'
 
 ### Classification
 
-Choose one:
-- **REPRODUCED** — the reported behavior was observed
-- **NOT REPRODUCED** — the reported behavior was not observed; instance behaved correctly
-- **INCONCLUSIVE** — could not determine due to environment constraints, missing driver, etc.
+- **REPRODUCED** — reported behavior was observed
+- **NOT REPRODUCED** — instance behaved correctly
+- **INCONCLUSIVE** — environment constraints, missing driver, etc.
 
 ### Compose Linear Comment
 
@@ -563,160 +297,123 @@ Choose one:
 **Application Database**: H2 / Postgres / MySQL / MariaDB
 
 ### Summary
-<1-2 sentences describing what was found>
+<1-2 sentences>
 
 ### Reproduction Method
-<Browser UI / API call / REPL / Code analysis — and brief description of what was done>
+<Browser UI / API call / REPL / Code analysis — brief description>
 
 ### Key Findings
-- <bullet point>
-- <bullet point>
-- <up to 5 total>
+- <up to 5 bullets>
 
 ### Evidence
-<Paste the most relevant evidence: API response, REPL output, or screenshot description>
-<If browser reproduction: describe what was observed in the UI, reference any screenshot>
+<Most relevant: API response, REPL output, or screenshot description>
 
-### Root Cause Hypothesis
-<If REPRODUCED: likely cause based on findings>
-<If NOT REPRODUCED: why it may work locally but fail in the reported environment>
-<If INCONCLUSIVE: what additional environment or setup would be needed>
+### Root Cause Hypothesis (if identified)
+<If REPRODUCED and clear: likely cause>
+<If unclear: "Root cause not determined — reproduction steps above demonstrate the bug.">
+<If NOT REPRODUCED: why it may work locally but fail in reported environment>
+<If INCONCLUSIVE: what additional setup needed>
 
 ### Failing Test
-<If a test was written: describe what the test does, which file it was added to, and confirm it fails against the buggy code. Note that a patch file is attached.>
-<If no test was written: explain why — root cause unclear, couldn't identify correct test location, REPL errors, status was not REPRODUCED, etc.>
+<If written: describe test, file, confirm it fails. Note patch attached.>
+<If not: explain why>
 
 ### Attempts
-
 | # | Approach | Hypothesis | Result |
 |---|----------|-----------|--------|
 | 1 | ... | ... | ... |
-| 2 | ... | ... | ... |
+
+### Approaches Not Tried
+<List skipped approaches with reasons. Omit if all were attempted.>
 
 ### Next Steps
-- <actionable item 1>
-- <actionable item 2>
-- <up to 3 total>
-
+- <up to 3 actionable items>
 ```
 
 ### Post to Linear
 
-> **IMPORTANT**: When creating the comment, set `createAsUser: "Claude Code"` and do NOT sync to GitHub. These are internal investigation comments and must stay Linear-only. If the Linear API supports a `doNotSyncToGithub` or similar flag, use it. Otherwise, prefix the comment body with `[internal]` to signal it should not be mirrored.
+> **IMPORTANT**: Do NOT sync to GitHub. Prefix with `[internal]` to prevent mirroring.
 
 ```
-mcp__plugin_productivity_linear__create_comment(issueId: "<LINEAR-ID>", body: "<comment body>")
+mcp__linear-server__save_comment(issueId: "<LINEAR-ID>", body: "<comment body>")
 ```
 
-If a Playwright screenshot was captured, describe it in the comment body. Do NOT attempt to attach screenshots via `create_attachment` with base64 content — this is known to fail with "Invalid base64 content" errors and wastes turns.
+### Label the Issue
 
-> **Linear subscription note**: Creating a comment via the Linear API will auto-subscribe the authenticated API user to the issue. This is a known Linear limitation — there is no `doNotSubscribe` parameter. The user should manually unsubscribe from issues or adjust their Linear notification settings if this is unwanted.
+| Status | Label |
+|--------|-------|
+| REPRODUCED | `.Auto Repro Success` |
+| NOT REPRODUCED | `.Auto Repro Failed` |
+| INCONCLUSIVE | `.Auto Repro Inconclusive` |
 
-If a test diff exists at `./repro/<ISSUE-ID>/test-diff.patch`, attach it to the Linear issue:
+The `labels` parameter REPLACES all labels — always include existing labels. Use the **exact full label names** above (e.g. `.Auto Repro Success`, NOT `.Auto Repro`). Fetch labels **once** with `list_issue_labels` at the start of Phase 6. Do not re-fetch — do NOT retry with partial names or variations if denied.
+
+If a Playwright screenshot was captured, describe it in the comment. Do NOT attach via `create_attachment` with base64 (known to fail).
+
+If `./repro/<ISSUE-ID>/test-diff.patch` exists, attach:
 ```
-mcp__plugin_productivity_linear__create_attachment(
+mcp__linear-server__create_attachment(
   issue: "<LINEAR-ID>",
-  base64Content: "<base64-encoded contents of test-diff.patch>",
+  base64Content: "<base64 of test-diff.patch>",
   filename: "<ISSUE-ID>-failing-test.patch",
   contentType: "text/x-patch",
   title: "Failing test patch"
 )
 ```
 
+### CI Run Link
+
+If `GITHUB_ACTIONS_RUN_URL` is set, append: `---\n*Investigated by [Repro-Bot CI](${GITHUB_ACTIONS_RUN_URL})*`
+
 ### Fallback
 
-If no Linear issue was found or resolved, print the full report to terminal and ask:
-> "Could not find a linked Linear issue. What is the Linear ID for this issue? (e.g., MB-1234)"
+If no Linear issue found:
+- **CI mode**: Print full report to console.
+- **Interactive**: Print to terminal, ask for Linear ID.
 
 ---
 
 ## Phase 7: Cleanup
 
-Stop the Metabase instance and remove the worktree:
-
 ```
-mcp__metabase-repro__stop_metabase(repro_dir="repro/<ISSUE-ID>")
+mcp__metabase-repro__cleanup(repro_dir="repro/<ISSUE-ID>")
 ```
 
-`stop_metabase` also removes the source worktree (`./repro/<ISSUE-ID>/source/`) to reclaim disk space, and stops any appdb Docker container that was started for this repro.
+Stops Metabase, removes source worktree, stops appdb, clears state. Left in place: DB files, logs, env, test diff.
 
-The following are **intentionally left in place** for post-investigation inspection:
-- H2 DB: `./repro/<ISSUE-ID>/metabase.mv.db`
-- Server log: `./repro/<ISSUE-ID>/metabase.log`
-- Env file: `./repro/<ISSUE-ID>/env.edn`
-- Test diff (if generated): `./repro/<ISSUE-ID>/test-diff.patch`
-
-No user notification needed — the Linear comment is the deliverable.
+> **CRITICAL**: Do NOT end after cleanup. Proceed to Phase 8.
 
 ---
 
 ## Phase 8: Self-Review
 
-After cleanup, review your own execution transcript and append findings to `./repro/<ISSUE-ID>/SUGGESTIONS.md`. This creates a per-issue record of improvement suggestions that `/auto-improve` later consolidates into tooling and prompt changes.
+Review your execution transcript and write findings to `./repro/<ISSUE-ID>/SUGGESTIONS.md`.
 
 ### What to review
 
-Scan the full conversation for:
-
-1. **MCP server issues** — tool errors, missing params, bad defaults, unhelpful error messages, or missing functionality that forced a bash fallback.
-2. **Prompt gaps** — missing steps, unclear instructions, wrong ordering, or missing edge cases in `.claude/commands/repro.md`.
-3. **Knowledge gaps** — facts that should be in `CLAUDE.md` but weren't (e.g., H2 timezone limits, version tag formats).
-4. **Permission prompts** — any tool call that required user approval and could be restructured to avoid it.
-5. **Memory-worthy patterns** — stable lessons learned that should persist across sessions.
+1. **MCP server issues** — tool errors, missing params, bad defaults
+2. **Prompt gaps** — missing steps, unclear instructions in repro.md
+3. **Knowledge gaps** — facts that should be documented
+4. **Permission prompts** — tool calls that could be restructured
+5. **Memory-worthy patterns** — stable lessons for future sessions
 
 ### Output format
-
-Write findings to `./repro/<ISSUE-ID>/SUGGESTIONS.md`:
 
 ```markdown
 ## <ISSUE-ID> — <DATE>
 
 | # | Category | Target File | Issue | Proposed Fix |
 |---|----------|-------------|-------|--------------|
-| 1 | MCP server | `mcp/metabase_repro/metabase.py` | [start-timeout] `start_metabase` doesn't report last log lines on timeout | Add: read last 30 lines of `metabase.log` and include in error response when startup exceeds 5 min |
-| 2 | Prompt | `.claude/commands/repro.md` | [version-fallback] Phase 2 doesn't explain what to do when version tag has no JAR | In Phase 2, after version extraction, add: "If `jar_download` fails, try the latest stable release via `gh release list`" |
-| 3 | CLAUDE.md | `CLAUDE.md` | [h2-json] H2 doesn't support JSON column type | Add to CLAUDE.md Notes section: "H2 doesn't support JSON columns — use TEXT and cast in queries" |
-| 4 | Permission | `.claude/commands/repro.md` | [curl-approval] Used `curl` instead of `api_call`, triggered approval | In Phase 4, add reminder: "NEVER use curl/wget — always use `api_call` MCP tool" |
-| 5 | Memory | `memory/metabase-quirks.md` | [ee-token-log] EE token errors flood the log but are harmless without a license | Persist: "Ignore 'Token validation failed' log messages in OSS/unlicensed runs" |
+| 1 | MCP server | `mcp/...` | [tag] description | Concrete fix |
 ```
 
-### Category reference
-
-Use **exactly** one of these categories per row (must match `/auto-improve` buckets):
-
-| Category | Meaning | Typical target file |
-|----------|---------|---------------------|
-| `MCP server` | Bug or improvement in MCP tool code | `mcp/metabase_repro/*.py` |
-| `Prompt` | Change needed in the repro command | `.claude/commands/repro.md` |
-| `CLAUDE.md` | Knowledge gap — fact that should be documented | `CLAUDE.md` |
-| `New tool` | Missing MCP tool functionality causing bash fallback | `mcp/metabase_repro/server.py` |
-| `Permission` | Action that triggered unnecessary user approval | Various |
-| `Memory` | Stable pattern to persist in memory files | `memory/*.md` |
-
 ### Rules
-- **One file per issue** — write to `./repro/<ISSUE-ID>/SUGGESTIONS.md`, not the project root
-- **Deduplication tags** — every Issue cell must start with a `[kebab-case-tag]` (e.g., `[socket-repl]`, `[ee-oss-tags]`, `[api-truncation]`). These tags enable frequency counting across runs via grep.
-- **Be specific in proposed fixes** — every item must include:
-  1. The **exact file path** to change
-  2. The **exact section/location** within that file (e.g., "Phase 3, after the `start_metabase` call")
-  3. The **actual text to add or change** (or a close approximation) — not "update the prompt" but the literal addition/edit
-- **Be actionable** — every item must propose a concrete fix (tool change, prompt change, or behavioral rule)
-- **No subagents** — do this review inline; you have the full transcript in context
-- **Skip if clean** — if the run had no issues worth noting, write: `## <ISSUE-ID> — <DATE>\n\nClean run — no issues.`
-- **Observations** — if there are findings that don't fit the table (e.g., "code analysis approach was effective"), add them as a `### Observations` section with 2-3 bullets max. Do not add a freeform "Notes" section.
+- **One file per issue** — write to `./repro/<ISSUE-ID>/SUGGESTIONS.md`
+- **Deduplication tags** — every Issue cell starts with `[kebab-case-tag]`
+- **Be specific** — exact file path, section/location, actual text to add/change
+- **Be actionable** — every item proposes a concrete fix
+- **No subagents** — review inline
+- **Skip if clean** — write `Clean run — no issues.`
+- **Observations** — if findings don't fit the table, add `### Observations` (2-3 bullets max)
 
----
-
-## Edge Case Handling
-
-| Scenario | Handling |
-|----------|----------|
-| No linked Linear issue | Print report to terminal, ask user for Linear ID |
-| JAR download fails | Report the error and the version string that was tried; suggest checking version format |
-| Metabase fails to start within 5 minutes | Report the last 30 lines of `metabase.log`, stop investigation |
-| Metabase needs a clean restart | Use `mcp__metabase-repro__reset_metabase(repro_dir="repro/<ISSUE-ID>")` then `start_metabase` again |
-| Frontend-only issue (no API/SQL) | Use playwright-cli; mark INCONCLUSIVE only if Playwright is unavailable |
-| Driver-specific issue (Postgres, MySQL) | Note that H2 was used; mark INCONCLUSIVE with a note about environment requirements |
-| Issue has no repro steps | Attempt reproduction based on title and description alone; note the absence of steps in report |
-| Prior auto-reproduce comment exists | Note the prior investigation in the report, proceed anyway with fresh investigation |
-| Version not found / download error | Try latest stable release as fallback (query `gh release list`); note the version fallback in the report. Do NOT use `master`. |
+Use **exactly** one category per row: `MCP server`, `Prompt`, `CLAUDE.md`, `New tool`, `Permission`, `Memory`.
