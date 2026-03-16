@@ -22,6 +22,7 @@ Examples:
 - **File reads**: Read whole files or large 500+ line chunks — never scan in 60-line windows. Anti-pattern: reading the same file 5+ times with small offsets. Read the whole file once.
 - **File searches**: Never search outside `./repro/`. Never `find /` or search the home directory.
 - **Git commands**: Use `git -C <path>` instead of `cd <path> && git ...`.
+- **CI environment failures are fatal**: If a CI infrastructure issue blocks progress (git repo missing branches/tags, Docker unavailable, missing tools, filesystem permission errors), do NOT attempt to diagnose or work around it. Post a CI failure to Linear with the exact error and **STOP immediately**. These are workflow configuration bugs that must be fixed in `repro-bot.yml`, not worked around at runtime.
 - **Parallelism**: ALWAYS batch independent tool calls in the same turn. Saves 30%+ on turns. **Enforced parallel checkpoints**:
   - Phase 0: Both ToolSearch calls (metabase-repro + linear-server)
   - Phase 1: `gh issue view` ∥ `list_issues` (GitHub + Linear fetch)
