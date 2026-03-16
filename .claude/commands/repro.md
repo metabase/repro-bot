@@ -28,7 +28,6 @@ Examples:
   - Phase 1: `gh issue view` ∥ `list_issues` (GitHub + Linear fetch)
   - Phase 3: `setup_worktree` ∥ `start_appdb` (worktree + Docker)
   - Phase 4: Multiple independent `repl_eval` calls, multiple Grep calls, `git log` + `git show`
-  - Phase 6: `list_issue_labels` ∥ compose comment (fetch labels early)
 - **No `wait-for-selector`**: `playwright-cli` does NOT have a `wait-for-selector` command. Use `snapshot` + `click` instead.
 - **Time budget**: ~25 min total. Prioritize reproduction over exploration.
 
@@ -55,7 +54,7 @@ Examples:
 Pre-fetch MCP tool schemas in two parallel `ToolSearch` calls:
 ```
 ToolSearch (call 1): select:mcp__metabase-repro__check_setup,mcp__metabase-repro__setup_master_worktree,mcp__metabase-repro__setup_worktree,mcp__metabase-repro__start_appdb,mcp__metabase-repro__start_metabase,mcp__metabase-repro__stop_metabase,mcp__metabase-repro__api_call,mcp__metabase-repro__get_session_token,mcp__metabase-repro__repl_eval,mcp__metabase-repro__run_test,mcp__metabase-repro__save_test_patch,mcp__metabase-repro__cleanup,mcp__metabase-repro__get_status,mcp__metabase-repro__browser_snapshot
-ToolSearch (call 2): select:mcp__linear-server__list_issues,mcp__linear-server__list_comments,mcp__linear-server__get_issue,mcp__linear-server__save_comment,mcp__linear-server__save_issue,mcp__linear-server__list_issue_labels,mcp__linear-server__create_attachment
+ToolSearch (call 2): select:mcp__linear-server__list_issues,mcp__linear-server__list_comments,mcp__linear-server__get_issue,mcp__linear-server__save_comment,mcp__linear-server__create_attachment
 ```
 
 If ToolSearch returns "No matching deferred tools found", wait 5 seconds and retry ONCE.
@@ -203,7 +202,7 @@ Invoke the `metabase-reference` skill for REPL recipes, API patterns, domain qui
 |------------|-----------------|
 | UI / frontend behavior | **playwright-cli** + **REPL** for data setup |
 | Setup steps in issue | **REPL** for data setup, **Playwright** for UI verification |
-| API / endpoint behavior | **REPL** (invoke handlers directly) or MCP `api_call` (note: `path` should NOT include `/api/` — it's prepended automatically, e.g. `path="/collection/root"`) |
+| API / endpoint behavior | **REPL** (invoke handlers directly) or MCP `api_call` (requires `email` param, `path` should NOT include `/api/` — it's prepended automatically, e.g. `path="/collection/root"`) |
 | Query results / SQL generation | **REPL**: `qp/process-query` or `qp.compile/compile` |
 | Wrong data / DB state | **REPL**: `t2/select` to inspect |
 | Permissions / auth flows | **REPL** + **Playwright** |
@@ -225,6 +224,8 @@ Invoke the `metabase-reference` skill for REPL recipes, API patterns, domain qui
 3. `start_metabase(repro_dir="repro/<ISSUE-ID>", version="<NEW>", port=<SAME>)`
 4. Metabase runs migrations automatically. Repeat to switch multiple times.
 
+> **Dashboard inline filters**: To configure card-specific inline filters via API, use `PUT /api/dashboard/:id` with `dashcards[].inline_parameters` (array of parameter IDs) and `dashcards[].parameter_mappings`. The parameter must also exist in `dashboard.parameters`.
+
 ### Browser Automation (playwright-cli)
 
 **Token reduction rules**:
@@ -241,7 +242,9 @@ playwright-cli goto http://localhost:<PORT>/question/1
 playwright-cli screenshot --filename=./repro/<ISSUE-ID>/playwright/screenshot.png
 ```
 
-Get session token from `get_session_token` or read `./repro/<ISSUE-ID>/session-token`.
+Get session token from `get_session_token` or read `./repro/<ISSUE-ID>/session-token-<email>`.
+
+> **`api_call` requires `email`**: Every `api_call` must include `email` (e.g., `email="crowberto@metabase.com"`). Call `get_session_token` for each user before making API calls as them.
 
 > **"Start exploring" modal**: Metabase shows this on first native question view. Snapshot to find button ref and click to dismiss.
 
@@ -361,18 +364,6 @@ Invoke the `write-test` skill. Continue to Phase 6 after completion.
 ```
 mcp__linear-server__save_comment(issueId: "<LINEAR-ID>", body: "<comment body>")
 ```
-
-### Label the Issue
-
-| Status | Label |
-|--------|-------|
-| REPRODUCED | `.Auto Repro Success` |
-| NOT REPRODUCED | `.Auto Repro Failed` |
-| INCONCLUSIVE | `.Auto Repro Inconclusive` |
-
-The `labels` parameter REPLACES all labels — always include existing labels. Fetch labels **once** with `list_issue_labels` at the start of Phase 6. Do not re-fetch — do NOT retry with partial names or variations if denied.
-
-> **LABEL GUARDRAIL**: Only use these exact label strings: `.Auto Repro Success`, `.Auto Repro Failed`, `.Auto Repro Inconclusive`. If the label you are about to apply does not exactly match one of these three strings, **STOP and log an error** instead of applying it. Never invent label names like `.Auto Repro Incorrect` or `.Auto Repro Confirmed`.
 
 If a Playwright screenshot was captured, describe it in the comment. Do NOT attach via `create_attachment` with base64 (known to fail).
 

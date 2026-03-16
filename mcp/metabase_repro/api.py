@@ -11,13 +11,14 @@ from .core import read_state_file
 
 
 def api_call(repro_dir: str, method: str, path: str,
+             email: str = "crowberto@metabase.com",
              body: str = "", jq_filter: str = "",
              max_response_chars: int = 10000) -> str:
     """Make an authenticated API call to a running Metabase instance.
 
-    Reads port and session token from state files. Falls back to API key.
-    jq_filter is applied in Python (basic key access only — for complex
-    filtering, use the raw JSON and process client-side).
+    Reads port and per-user session token from state files.
+    Every call must include email (defaults to crowberto@metabase.com).
+    Call get_session_token for each user before making API calls as them.
 
     Returns JSON response as formatted string.
     """
@@ -25,13 +26,13 @@ def api_call(repro_dir: str, method: str, path: str,
     if not port:
         return f"ERROR: No port file found at {repro_dir}/port. Is Metabase running?"
 
-    # Build auth header
-    session_token = read_state_file(repro_dir, "session-token")
+    # Build auth header from per-user session token
+    session_token = read_state_file(repro_dir, f"session-token-{email}")
     headers: dict[str, str] = {}
     if session_token:
         headers["X-Metabase-Session"] = session_token
     else:
-        headers["x-api-key"] = "mb_adminapikey"
+        return f"ERROR: No session token for {email}. Call get_session_token first."
 
     # Defensive: strip /api/ prefix if caller included it (common mistake)
     if path.startswith("/api/"):
