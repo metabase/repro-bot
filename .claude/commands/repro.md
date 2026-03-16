@@ -22,11 +22,14 @@ Examples:
 - **File reads**: Read whole files or large 500+ line chunks — never scan in 60-line windows. Anti-pattern: reading the same file 5+ times with small offsets. Read the whole file once.
 - **File searches**: Never search outside `./repro/`. Never `find /` or search the home directory.
 - **Git commands**: Use `git -C <path>` instead of `cd <path> && git ...`.
-- **Parallelism**: ALWAYS batch independent tool calls in the same turn. Saves 30%+ on turns. Common parallel batches: multiple Grep calls, `git log` + `git show`, independent `repl_eval` calls, `setup_worktree` + `start_appdb`.
+- **Parallelism**: ALWAYS batch independent tool calls in the same turn. Saves 30%+ on turns. **Enforced parallel checkpoints**:
+  - Phase 0: Both ToolSearch calls (metabase-repro + linear-server)
+  - Phase 1: `gh issue view` ∥ `list_issues` (GitHub + Linear fetch)
+  - Phase 3: `setup_worktree` ∥ `start_appdb` (worktree + Docker)
+  - Phase 4: Multiple independent `repl_eval` calls, multiple Grep calls, `git log` + `git show`
+  - Phase 6: `list_issue_labels` ∥ compose comment (fetch labels early)
 - **No `wait-for-selector`**: `playwright-cli` does NOT have a `wait-for-selector` command. Use `snapshot` + `click` instead.
 - **Time budget**: ~25 min total. Prioritize reproduction over exploration.
-
-> **MCP tool schemas**: At the **start of the run**, pre-fetch all MCP tool schemas in a single `ToolSearch` call: `select:mcp__metabase-repro__check_setup,mcp__metabase-repro__setup_master_worktree,mcp__metabase-repro__setup_worktree,mcp__metabase-repro__start_appdb,mcp__metabase-repro__start_metabase,mcp__metabase-repro__stop_metabase,mcp__metabase-repro__api_call,mcp__metabase-repro__get_session_token,mcp__metabase-repro__repl_eval,mcp__metabase-repro__run_test,mcp__metabase-repro__save_test_patch,mcp__metabase-repro__cleanup,mcp__metabase-repro__get_status,mcp__metabase-repro__browser_snapshot,mcp__linear-server__list_issues,mcp__linear-server__list_comments,mcp__linear-server__get_issue,mcp__linear-server__save_comment,mcp__linear-server__save_issue,mcp__linear-server__list_issue_labels,mcp__linear-server__create_attachment`. Do NOT fetch schemas one-at-a-time.
 
 > **CI mode**: When `GITHUB_ACTIONS_RUN_URL` is set, this runs in GitHub Actions CI. On catastrophic failure (MCP errors, startup failures, unrecoverable errors), post to Linear before stopping:
 > ```markdown
@@ -43,11 +46,29 @@ Examples:
 
 ## Phase 0: Pre-flight Check
 
+> **CRITICAL GATE — DO NOT SKIP OR WORK AROUND**
+> If the metabase-repro MCP server is not available, you MUST stop entirely.
+> Do NOT fall back to code analysis, do NOT write tests from source reading alone,
+> do NOT proceed to any other phase. The entire workflow requires MCP tools.
+
+Pre-fetch MCP tool schemas in two parallel `ToolSearch` calls:
+```
+ToolSearch (call 1): select:mcp__metabase-repro__check_setup,mcp__metabase-repro__setup_master_worktree,mcp__metabase-repro__setup_worktree,mcp__metabase-repro__start_appdb,mcp__metabase-repro__start_metabase,mcp__metabase-repro__stop_metabase,mcp__metabase-repro__api_call,mcp__metabase-repro__get_session_token,mcp__metabase-repro__repl_eval,mcp__metabase-repro__run_test,mcp__metabase-repro__save_test_patch,mcp__metabase-repro__cleanup,mcp__metabase-repro__get_status,mcp__metabase-repro__browser_snapshot
+ToolSearch (call 2): select:mcp__linear-server__list_issues,mcp__linear-server__list_comments,mcp__linear-server__get_issue,mcp__linear-server__save_comment,mcp__linear-server__save_issue,mcp__linear-server__list_issue_labels,mcp__linear-server__create_attachment
+```
+
+If ToolSearch returns "No matching deferred tools found", wait 5 seconds and retry ONCE.
+If it fails again:
+1. Post a CI failure to Linear (if issue ID is known) with error "metabase-repro MCP server not available"
+2. Write SUGGESTIONS.md noting the MCP server failure
+3. **STOP. Do not continue to any other phase.**
+
+Then call:
 ```
 mcp__metabase-repro__check_setup()
 ```
 
-If this fails with "No such tool available", wait 5 seconds and retry once. If it fails again, STOP: "The metabase-repro MCP server is not available." If it reports missing items, STOP — the user will fix before re-running.
+If it reports missing items, STOP — the user will fix before re-running.
 
 Then verify playwright-cli:
 ```bash
@@ -188,7 +209,7 @@ Invoke the `metabase-reference` skill for REPL recipes, API patterns, domain qui
 | Code logic / edge case | **REPL**: read source then invoke functions |
 | Checking if fixed | Compare source + **REPL** to test both versions |
 
-> **Code analysis budget**: When investigating via code analysis, compare the buggy version's source with master in at most 10-12 targeted file reads. Do NOT trace full git history — if the bug is clear from source comparison, that's sufficient evidence. Save git archaeology for ambiguous cases.
+> **Code analysis budget**: When investigating via code analysis, compare the buggy version's source with master in at most 5-7 targeted file reads. If root cause isn't clear by then, switch to REPL/API verification. Do NOT trace full git history — if the bug is clear from source comparison, that's sufficient evidence. Save git archaeology for ambiguous cases.
 
 > **Backend bugs**: For backend-classified bugs, limit Playwright to 1-2 screenshots for evidence. Do NOT iterate on UI reproduction if REPL already confirmed the bug.
 
@@ -208,7 +229,7 @@ Invoke the `metabase-reference` skill for REPL recipes, API patterns, domain qui
 **Token reduction rules**:
 - Create questions/dashboards/data via API or REPL — NEVER use Playwright for creation UIs
 - Navigate directly to `/question/<ID>` or `/dashboard/<ID>`
-- **Snapshot via MCP tool**: Use `mcp__metabase-repro__browser_snapshot(repro_dir="repro/<ISSUE-ID>", name="descriptive-name")` instead of `playwright-cli snapshot` via Bash. The MCP tool saves full YAML to file and returns only a compact summary with interactive element refs — keeping large YAML out of context. Use `Read` on the saved YAML file when you need full page structure. NEVER use `playwright-cli snapshot` directly via Bash. NEVER snapshot pivot tables, large data views, or home page.
+- **Snapshot via MCP tool**: Use `mcp__metabase-repro__browser_snapshot(repro_dir="repro/<ISSUE-ID>", name="descriptive-name")` instead of `playwright-cli snapshot` via Bash. The MCP tool saves full YAML to file and returns only a compact summary with interactive element refs — keeping large YAML out of context. Only read the saved YAML file if the summary doesn't contain the element ref you need. NEVER use `playwright-cli snapshot` directly via Bash. NEVER snapshot pivot tables, large data views, or home page.
 - NEVER use `&` (background) with playwright-cli
 
 **Login and navigate** (use port from `start_metabase`):
@@ -272,6 +293,8 @@ Evaluate: what was tested, actual result, whether it matches reported behavior. 
 ## Phase 5: Write Failing Test
 
 > **Gate**: Only if status is REPRODUCED. Otherwise skip to Phase 6.
+>
+> **Time gate**: If more than 18 minutes have elapsed since Phase 0, skip Phase 5 and note "Time budget exceeded — failing test not written" in the report. Proceed to Phase 6.
 
 Invoke the `write-test` skill. Continue to Phase 6 after completion.
 
@@ -346,7 +369,9 @@ mcp__linear-server__save_comment(issueId: "<LINEAR-ID>", body: "<comment body>")
 | NOT REPRODUCED | `.Auto Repro Failed` |
 | INCONCLUSIVE | `.Auto Repro Inconclusive` |
 
-The `labels` parameter REPLACES all labels — always include existing labels. Use the **exact full label names** above (e.g. `.Auto Repro Success`, NOT `.Auto Repro`). Fetch labels **once** with `list_issue_labels` at the start of Phase 6. Do not re-fetch — do NOT retry with partial names or variations if denied.
+The `labels` parameter REPLACES all labels — always include existing labels. Fetch labels **once** with `list_issue_labels` at the start of Phase 6. Do not re-fetch — do NOT retry with partial names or variations if denied.
+
+> **LABEL GUARDRAIL**: Only use these exact label strings: `.Auto Repro Success`, `.Auto Repro Failed`, `.Auto Repro Inconclusive`. If the label you are about to apply does not exactly match one of these three strings, **STOP and log an error** instead of applying it. Never invent label names like `.Auto Repro Incorrect` or `.Auto Repro Confirmed`.
 
 If a Playwright screenshot was captured, describe it in the comment. Do NOT attach via `create_attachment` with base64 (known to fail).
 

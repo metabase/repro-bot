@@ -33,7 +33,7 @@ def check_setup() -> str:
 
 
 @mcp.tool()
-def start_appdb(repro_dir: str, db_type: str = "mysql") -> str:
+def start_appdb(repro_dir: str, db_type: str = "postgres") -> str:
     """Start a Docker container for the Metabase application database."""
     return appdb.start_appdb(repro_dir, db_type)
 
