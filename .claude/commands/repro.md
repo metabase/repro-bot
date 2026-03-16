@@ -16,6 +16,7 @@ Examples:
 - **No clojure CLI**: Use `repl_eval` or `run_test`. Never `clojure -M/-X` (wastes 30-60s per invocation).
 - **Local code search only**: Grep/Glob against `./repro/` worktrees. Never `gh search code`.
 - **No subagents for code search**: Direct Grep (~100 tokens) vs subagent (50K-100K tokens).
+- **Grep/Glob tools for ALL code searches**: Use the Grep and Glob tools for ALL code searches. Never use `grep`, `find`, or `rg` via Bash. The dedicated tools are faster, cheaper, and easier to review.
 - **Browser**: `playwright-cli` via Bash. Never `mcp__playwright__*`. See `.claude/skills/playwright-cli/SKILL.md`.
 - **Linear**: Call `mcp__linear-server__*` tools directly, not via subagents (subagents can't access MCP tools).
 - **No web search**: Never use WebSearch/WebFetch for issue details. All data from `gh` CLI or Linear MCP.
@@ -153,7 +154,7 @@ Default to **EE** (`1.x.y`). Use **OSS** (`0.x.y`) only if issue says "OSS" or u
 mcp__metabase-repro__setup_worktree(repro_dir="repro/<ISSUE-ID>", version_ref="v1.50.2")
 ```
 
-`setup_worktree` auto-normalizes EE→OSS tags and fetches missing tags.
+`setup_worktree` auto-normalizes EE→OSS tags and fetches missing tags. Example: if the issue says `v1.50.2` but only `v0.50.2` exists in the repo, the tool handles the conversion automatically — no need to manually retry with the alternate prefix.
 
 **Default (Postgres)**: Start appdb then create env:
 ```
@@ -211,6 +212,8 @@ Invoke the `metabase-reference` skill for REPL recipes, API patterns, domain qui
 
 > **Code analysis budget**: When investigating via code analysis, compare the buggy version's source with master in at most 5-7 targeted file reads. If root cause isn't clear by then, switch to REPL/API verification. Do NOT trace full git history — if the bug is clear from source comparison, that's sufficient evidence. Save git archaeology for ambiguous cases.
 
+> **Code search efficiency**: When searching source code, use at most 3-5 Grep calls with broad patterns. Parallelize independent searches in a single turn. Do NOT run sequential narrow greps iterating on the same pattern — if the first grep doesn't find it, broaden the pattern instead of adding more greps. Never run more than 5 sequential code search commands.
+
 > **Backend bugs**: For backend-classified bugs, limit Playwright to 1-2 screenshots for evidence. Do NOT iterate on UI reproduction if REPL already confirmed the bug.
 
 > **Timing / race-condition bugs**: If reproduction requires simulating slow API responses or race conditions that can't be triggered locally, proceed with code analysis. Note in report that root cause is confirmed via code review but not empirically observable in a single-instance environment.
@@ -239,6 +242,7 @@ Invoke the `metabase-reference` skill for REPL recipes, API patterns, domain qui
 playwright-cli open http://localhost:<PORT>/auth/login
 playwright-cli cookie-set metabase.SESSION "<session-token>" --domain=localhost
 playwright-cli goto http://localhost:<PORT>/question/1
+mkdir -p ./repro/<ISSUE-ID>/playwright
 playwright-cli screenshot --filename=./repro/<ISSUE-ID>/playwright/screenshot.png
 ```
 
@@ -288,15 +292,15 @@ WebFetch https://www.metabase.com/docs/latest/<relevant-section>
 
 Evaluate: what was tested, actual result, whether it matches reported behavior. Self-critique: "Did I test the right thing?"
 
-> **Code analysis as reproduction**: If the defective code path is unambiguously identified in source AND either (a) a fix exists in a newer version, or (b) the logic error is self-evident, classify as REPRODUCED (via code analysis). Note in the report that reproduction was via source review, not live testing.
+> **Code analysis as reproduction**: If the defective code path is unambiguously identified in source AND a fix exists in a newer version, classify as SEEN FIXED (via code analysis). If the logic error is self-evident and still present on master, classify as REPRODUCED (via code analysis). Note in the report that reproduction was via source review, not live testing.
 
-**Stop when**: REPRODUCED, NOT REPRODUCED, or after 3 inconclusive attempts → INCONCLUSIVE.
+**Stop when**: REPRODUCED, SEEN FIXED, NOT REPRODUCED, or after 3 inconclusive attempts → INCONCLUSIVE.
 
 ---
 
 ## Phase 5: Write Failing Test
 
-> **Gate**: Only if status is REPRODUCED. Otherwise skip to Phase 6.
+> **Gate**: Only if status is REPRODUCED (still broken on master). Skip for SEEN FIXED, NOT REPRODUCED, or INCONCLUSIVE — proceed to Phase 6.
 >
 > **Time gate**: If more than 18 minutes have elapsed since Phase 0, skip Phase 5 and note "Time budget exceeded — failing test not written" in the report. Proceed to Phase 6.
 
@@ -310,8 +314,9 @@ Invoke the `write-test` skill. Continue to Phase 6 after completion.
 
 ### Classification
 
-- **REPRODUCED** — reported behavior was observed
-- **NOT REPRODUCED** — instance behaved correctly
+- **REPRODUCED** — reported behavior was observed and is still present on master
+- **SEEN FIXED** — reported behavior was reproduced on the reported version, but a fix was found in a newer version. Use `git log --oneline --all --grep="<keyword>" -C ./repro/<ISSUE-ID>/source/` to identify the fix commit and include it in the report.
+- **NOT REPRODUCED** — instance behaved correctly; could not trigger the reported behavior
 - **INCONCLUSIVE** — environment constraints, missing driver, etc.
 
 ### Compose Linear Comment
@@ -319,7 +324,7 @@ Invoke the `write-test` skill. Continue to Phase 6 after completion.
 ```markdown
 ## Repro-Bot Investigation
 
-**Status**: REPRODUCED / NOT REPRODUCED / INCONCLUSIVE
+**Status**: REPRODUCED / SEEN FIXED / NOT REPRODUCED / INCONCLUSIVE
 **Metabase Version**: <version tested>
 **Application Database**: H2 / Postgres / MySQL / MariaDB
 
@@ -337,7 +342,8 @@ Invoke the `write-test` skill. Continue to Phase 6 after completion.
 
 ### Root Cause Hypothesis (if identified)
 <If REPRODUCED and clear: likely cause>
-<If unclear: "Root cause not determined — reproduction steps above demonstrate the bug.">
+<If REPRODUCED unclear: "Root cause not determined — reproduction steps above demonstrate the bug.">
+<If SEEN FIXED: identify the fix commit and what it changed>
 <If NOT REPRODUCED: why it may work locally but fail in reported environment>
 <If INCONCLUSIVE: what additional setup needed>
 
