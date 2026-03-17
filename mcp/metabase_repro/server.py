@@ -33,7 +33,7 @@ def check_setup() -> str:
 
 
 @mcp.tool()
-def start_appdb(repro_dir: str, db_type: str = "mysql") -> str:
+def start_appdb(repro_dir: str, db_type: str = "postgres") -> str:
     """Start a Docker container for the Metabase application database."""
     return appdb.start_appdb(repro_dir, db_type)
 
@@ -94,15 +94,15 @@ def get_session_token(repro_dir: str, email: str = "crowberto@metabase.com", pas
     """Obtain a fresh session token for a running Metabase instance.
 
     Tries EE password (blackjet) then OSS (1Blackjet!) if no password given.
-    Saves the token to the session-token state file."""
+    Saves the token to a per-user session-token-{email} state file."""
     port_str = read_state_file(repro_dir, "port")
     if not port_str:
         return "ERROR: No port file found. Is Metabase running?"
     port = int(port_str)
     token, err = metabase.get_session_token(port, email, password if password else None)
     if token:
-        write_state_file(repro_dir, "session-token", token)
-        return f"Session token: {token}"
+        write_state_file(repro_dir, f"session-token-{email}", token)
+        return f"Session token for {email}: {token}"
     return f"ERROR: Could not authenticate: {err}"
 
 
@@ -118,13 +118,15 @@ def check_setup_token(repro_dir: str) -> str:
 
 
 @mcp.tool()
-def api_call(repro_dir: str, method: str, path: str, body: str = "",
-             jq_filter: str = "", max_response_chars: int = 10000) -> str:
+def api_call(repro_dir: str, method: str, path: str, email: str = "crowberto@metabase.com",
+             body: str = "", jq_filter: str = "", max_response_chars: int = 10000) -> str:
     """Make an authenticated API call to a running Metabase instance.
 
-    Reads port and session token from state files automatically.
+    Reads port and per-user session token from state files automatically.
+    Every call must include email (defaults to crowberto@metabase.com).
+    Call get_session_token for each user before making API calls as them.
     Large responses are truncated to max_response_chars (default 10000). Use jq_filter to narrow results."""
-    return api.api_call(repro_dir, method, path, body, jq_filter, max_response_chars)
+    return api.api_call(repro_dir, method, path, email, body, jq_filter, max_response_chars)
 
 
 @mcp.tool()

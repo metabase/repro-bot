@@ -368,7 +368,7 @@ def start_metabase(repro_dir: str, version: str, port: int | None = None) -> str
     if not token:
         token, session_err = get_session_token(port)
     if token:
-        write_state_file(repro_dir, "session-token", token)
+        write_state_file(repro_dir, "session-token-crowberto@metabase.com", token)
     else:
         setup_error = f"Could not obtain session token: {session_err}"
 
@@ -482,9 +482,15 @@ def reset_metabase(repro_dir: str) -> str:
             pass
 
     # Remove stale state files
-    for f in ["port", "session-token", "nrepl-port"]:
+    for f in ["port", "nrepl-port"]:
         try:
             os.remove(repro_path(repro_dir, f))
+        except FileNotFoundError:
+            pass
+    # Remove all per-user session token files
+    for f in glob.glob(repro_path(repro_dir, "session-token-*")):
+        try:
+            os.remove(f)
         except FileNotFoundError:
             pass
 

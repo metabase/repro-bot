@@ -11,12 +11,42 @@ description: Reference material for Metabase reproduction — REPL recipes, API 
 
 **Check settings**: `(t2/select-one :model/Setting :key "site-name")`
 
-**Create saved question**:
+**Create saved question (native SQL)**:
 ```clojure
-(t2/insert-returning-instance! :model/Card
+(mt/user-http-request :crowberto :post 200 "card"
   {:name "Test Question" :database_id 1
    :dataset_query {:database 1 :type :native :native {:query "SELECT 1"}}
-   :display :table :visualization_settings {} :creator_id 1 :collection_id nil})
+   :display :table :visualization_settings {} :collection_id nil})
+```
+
+**Create MBQL question** (via API — preferred for card creation):
+```
+api_call(method="POST", path="/card", body='{"name":"Test Question","database_id":1,"dataset_query":{"database":1,"type":"query","query":{"source-table":3,"aggregation":[["count"]],"breakout":[["field",63,{"temporal-unit":"month"}],["field",18,null]],"order-by":[["asc",["field",63,{"temporal-unit":"month"}]]]}},"display":"bar","visualization_settings":{},"collection_id":null}')
+```
+Key fields: `database_id` (top-level, required), `dataset_query.database` (must match), `dataset_query.type` = `"query"` for MBQL. Use `"native"` only for raw SQL.
+
+**Create MBQL question** (via REPL — use only for non-UI bugs):
+```clojure
+(mt/user-http-request :crowberto :post 200 "card"
+  {:name "Test Question" :database_id 1
+   :dataset_query {:database 1 :type :query
+                   :query {:source-table 3
+                           :aggregation [[:count]]
+                           :breakout [[:field 63 {:temporal-unit :month}]
+                                      [:field 18 nil]]}}
+   :display :bar :visualization_settings {} :collection_id nil})
+```
+Returns the full card map with `:id`. Do NOT use `t2/insert-returning-instance!` for cards — it silently fails due to internal validation.
+
+> **Card creation pitfall**: Never use `t2/insert-returning-instance!` for `:model/Card` — it silently returns `nil` when the internal pMBQL validation rejects the query format. Always use `api_call` or `mt/user-http-request` which give clear error messages on schema violations.
+
+**Look up table and field IDs** (needed for MBQL queries):
+```
+api_call(method="GET", path="/database/1/metadata", jq_filter="[.tables[] | {id, name, fields: [.fields[] | {id, name}]}]")
+```
+Or via REPL:
+```clojure
+(t2/select [:model/Field :id :name :table_id] :table_id 3)
 ```
 
 **Run query**:

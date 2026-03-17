@@ -9,6 +9,21 @@ from .core import repro_path, run, read_state_file, truncate_output
 from .repl import repl_eval as _repl_eval_fn
 
 
+def _ensure_node_modules(source_dir: str) -> str | None:
+    """Ensure node_modules exists in source_dir, symlinking from CI if needed.
+
+    Returns None on success, or an error message string on failure.
+    """
+    target = os.path.join(source_dir, "node_modules")
+    if os.path.isdir(target):
+        return None
+    ci_modules = os.environ.get("REPRO_NODE_MODULES_DIR")
+    if ci_modules and os.path.isdir(ci_modules):
+        os.symlink(ci_modules, target)
+        return None
+    return "ERROR: node_modules not found. Run 'yarn install' or 'bun install' in the source worktree first, or skip test execution and save the patch."
+
+
 def _detect_pkg_manager(source_dir: str) -> str:
     """Detect package manager from package.json. Returns 'bun' or 'yarn'."""
     pkg_json = os.path.join(source_dir, "package.json")
@@ -107,8 +122,9 @@ def _run_clojure_test(source_dir: str, test_file: str, port: int | None, repro_d
 
 def _run_jest_test(source_dir: str, test_file: str) -> str:
     """Run a Jest unit test."""
-    if not os.path.isdir(os.path.join(source_dir, "node_modules")):
-        return "ERROR: node_modules not found. Run 'yarn install' or 'bun install' in the source worktree first, or skip test execution and save the patch."
+    err = _ensure_node_modules(source_dir)
+    if err:
+        return err
 
     pkg_mgr = _detect_pkg_manager(source_dir)
     if pkg_mgr == "bun":
@@ -125,8 +141,9 @@ def _run_cypress_test(source_dir: str, test_file: str, port: int | None) -> str:
     if not port:
         return "ERROR: Cypress tests require a port for the running Metabase instance"
 
-    if not os.path.isdir(os.path.join(source_dir, "node_modules")):
-        return "ERROR: node_modules not found. Run 'yarn install' or 'bun install' in the source worktree first, or skip test execution and save the patch."
+    err = _ensure_node_modules(source_dir)
+    if err:
+        return err
 
     import subprocess
     env = _node_env() or os.environ.copy()

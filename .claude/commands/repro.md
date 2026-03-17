@@ -16,17 +16,21 @@ Examples:
 - **No clojure CLI**: Use `repl_eval` or `run_test`. Never `clojure -M/-X` (wastes 30-60s per invocation).
 - **Local code search only**: Grep/Glob against `./repro/` worktrees. Never `gh search code`.
 - **No subagents for code search**: Direct Grep (~100 tokens) vs subagent (50K-100K tokens).
+- **Grep/Glob tools for ALL code searches**: Use the Grep and Glob tools for ALL code searches. Never use `grep`, `find`, or `rg` via Bash. The dedicated tools are faster, cheaper, and easier to review.
 - **Browser**: `playwright-cli` via Bash. Never `mcp__playwright__*`. See `.claude/skills/playwright-cli/SKILL.md`.
 - **Linear**: Call `mcp__linear-server__*` tools directly, not via subagents (subagents can't access MCP tools).
 - **No web search**: Never use WebSearch/WebFetch for issue details. All data from `gh` CLI or Linear MCP.
 - **File reads**: Read whole files or large 500+ line chunks — never scan in 60-line windows. Anti-pattern: reading the same file 5+ times with small offsets. Read the whole file once.
 - **File searches**: Never search outside `./repro/`. Never `find /` or search the home directory.
 - **Git commands**: Use `git -C <path>` instead of `cd <path> && git ...`.
-- **Parallelism**: ALWAYS batch independent tool calls in the same turn. Saves 30%+ on turns. Common parallel batches: multiple Grep calls, `git log` + `git show`, independent `repl_eval` calls, `setup_worktree` + `start_appdb`.
+- **CI environment failures are fatal**: If a CI infrastructure issue blocks progress (git repo missing branches/tags, Docker unavailable, missing tools, filesystem permission errors), do NOT attempt to diagnose or work around it. Post a CI failure to Linear with the exact error and **STOP immediately**. These are workflow configuration bugs that must be fixed in `repro-bot.yml`, not worked around at runtime.
+- **Parallelism**: ALWAYS batch independent tool calls in the same turn. Saves 30%+ on turns. **Enforced parallel checkpoints**:
+  - Phase 0: Both ToolSearch calls (metabase-repro + linear-server)
+  - Phase 1: `gh issue view` ∥ `list_issues` (GitHub + Linear fetch)
+  - Phase 3: `setup_worktree` ∥ `start_appdb` (worktree + Docker)
+  - Phase 4: Multiple independent `repl_eval` calls, multiple Grep calls, `git log` + `git show`
 - **No `wait-for-selector`**: `playwright-cli` does NOT have a `wait-for-selector` command. Use `snapshot` + `click` instead.
 - **Time budget**: ~25 min total. Prioritize reproduction over exploration.
-
-> **MCP tool schemas**: At the **start of the run**, pre-fetch all MCP tool schemas in a single `ToolSearch` call: `select:mcp__metabase-repro__check_setup,mcp__metabase-repro__setup_master_worktree,mcp__metabase-repro__setup_worktree,mcp__metabase-repro__start_appdb,mcp__metabase-repro__start_metabase,mcp__metabase-repro__stop_metabase,mcp__metabase-repro__api_call,mcp__metabase-repro__get_session_token,mcp__metabase-repro__repl_eval,mcp__metabase-repro__run_test,mcp__metabase-repro__save_test_patch,mcp__metabase-repro__cleanup,mcp__metabase-repro__get_status,mcp__metabase-repro__browser_snapshot,mcp__linear-server__list_issues,mcp__linear-server__list_comments,mcp__linear-server__get_issue,mcp__linear-server__save_comment,mcp__linear-server__save_issue,mcp__linear-server__list_issue_labels,mcp__linear-server__create_attachment`. Do NOT fetch schemas one-at-a-time.
 
 > **CI mode**: When `GITHUB_ACTIONS_RUN_URL` is set, this runs in GitHub Actions CI. On catastrophic failure (MCP errors, startup failures, unrecoverable errors), post to Linear before stopping:
 > ```markdown
@@ -43,11 +47,29 @@ Examples:
 
 ## Phase 0: Pre-flight Check
 
+> **CRITICAL GATE — DO NOT SKIP OR WORK AROUND**
+> If the metabase-repro MCP server is not available, you MUST stop entirely.
+> Do NOT fall back to code analysis, do NOT write tests from source reading alone,
+> do NOT proceed to any other phase. The entire workflow requires MCP tools.
+
+Pre-fetch MCP tool schemas in two parallel `ToolSearch` calls:
+```
+ToolSearch (call 1): select:mcp__metabase-repro__check_setup,mcp__metabase-repro__setup_master_worktree,mcp__metabase-repro__setup_worktree,mcp__metabase-repro__start_appdb,mcp__metabase-repro__start_metabase,mcp__metabase-repro__stop_metabase,mcp__metabase-repro__api_call,mcp__metabase-repro__get_session_token,mcp__metabase-repro__repl_eval,mcp__metabase-repro__run_test,mcp__metabase-repro__save_test_patch,mcp__metabase-repro__cleanup,mcp__metabase-repro__get_status,mcp__metabase-repro__browser_snapshot
+ToolSearch (call 2): select:mcp__linear-server__list_issues,mcp__linear-server__list_comments,mcp__linear-server__get_issue,mcp__linear-server__save_comment,mcp__linear-server__create_attachment
+```
+
+If ToolSearch returns "No matching deferred tools found", wait 5 seconds and retry ONCE.
+If it fails again:
+1. Post a CI failure to Linear (if issue ID is known) with error "metabase-repro MCP server not available"
+2. Write SUGGESTIONS.md noting the MCP server failure
+3. **STOP. Do not continue to any other phase.**
+
+Then call:
 ```
 mcp__metabase-repro__check_setup()
 ```
 
-If this fails with "No such tool available", wait 5 seconds and retry once. If it fails again, STOP: "The metabase-repro MCP server is not available." If it reports missing items, STOP — the user will fix before re-running.
+If it reports missing items, STOP — the user will fix before re-running.
 
 Then verify playwright-cli:
 ```bash
@@ -132,7 +154,7 @@ Default to **EE** (`1.x.y`). Use **OSS** (`0.x.y`) only if issue says "OSS" or u
 mcp__metabase-repro__setup_worktree(repro_dir="repro/<ISSUE-ID>", version_ref="v1.50.2")
 ```
 
-`setup_worktree` auto-normalizes EE→OSS tags and fetches missing tags.
+`setup_worktree` auto-normalizes EE→OSS tags and fetches missing tags. Example: if the issue says `v1.50.2` but only `v0.50.2` exists in the repo, the tool handles the conversion automatically — no need to manually retry with the alternate prefix.
 
 **Default (Postgres)**: Start appdb then create env:
 ```
@@ -181,14 +203,16 @@ Invoke the `metabase-reference` skill for REPL recipes, API patterns, domain qui
 |------------|-----------------|
 | UI / frontend behavior | **playwright-cli** + **REPL** for data setup |
 | Setup steps in issue | **REPL** for data setup, **Playwright** for UI verification |
-| API / endpoint behavior | **REPL** (invoke handlers directly) or MCP `api_call` (note: `path` should NOT include `/api/` — it's prepended automatically, e.g. `path="/collection/root"`) |
+| API / endpoint behavior | **REPL** (invoke handlers directly) or MCP `api_call` (requires `email` param, `path` should NOT include `/api/` — it's prepended automatically, e.g. `path="/collection/root"`) |
 | Query results / SQL generation | **REPL**: `qp/process-query` or `qp.compile/compile` |
 | Wrong data / DB state | **REPL**: `t2/select` to inspect |
 | Permissions / auth flows | **REPL** + **Playwright** |
 | Code logic / edge case | **REPL**: read source then invoke functions |
 | Checking if fixed | Compare source + **REPL** to test both versions |
 
-> **Code analysis budget**: When investigating via code analysis, compare the buggy version's source with master in at most 10-12 targeted file reads. Do NOT trace full git history — if the bug is clear from source comparison, that's sufficient evidence. Save git archaeology for ambiguous cases.
+> **Code analysis budget**: When investigating via code analysis, compare the buggy version's source with master in at most 5-7 targeted file reads. If root cause isn't clear by then, switch to REPL/API verification. Do NOT trace full git history — if the bug is clear from source comparison, that's sufficient evidence. Save git archaeology for ambiguous cases.
+
+> **Code search efficiency**: When searching source code, use at most 3-5 Grep calls with broad patterns. Parallelize independent searches in a single turn. Do NOT run sequential narrow greps iterating on the same pattern — if the first grep doesn't find it, broaden the pattern instead of adding more greps. Never run more than 5 sequential code search commands.
 
 > **Backend bugs**: For backend-classified bugs, limit Playwright to 1-2 screenshots for evidence. Do NOT iterate on UI reproduction if REPL already confirmed the bug.
 
@@ -203,12 +227,14 @@ Invoke the `metabase-reference` skill for REPL recipes, API patterns, domain qui
 3. `start_metabase(repro_dir="repro/<ISSUE-ID>", version="<NEW>", port=<SAME>)`
 4. Metabase runs migrations automatically. Repeat to switch multiple times.
 
+> **Dashboard inline filters**: To configure card-specific inline filters via API, use `PUT /api/dashboard/:id` with `dashcards[].inline_parameters` (array of parameter IDs) and `dashcards[].parameter_mappings`. The parameter must also exist in `dashboard.parameters`.
+
 ### Browser Automation (playwright-cli)
 
 **Token reduction rules**:
 - Create questions/dashboards/data via API or REPL — NEVER use Playwright for creation UIs
 - Navigate directly to `/question/<ID>` or `/dashboard/<ID>`
-- **Snapshot via MCP tool**: Use `mcp__metabase-repro__browser_snapshot(repro_dir="repro/<ISSUE-ID>", name="descriptive-name")` instead of `playwright-cli snapshot` via Bash. The MCP tool saves full YAML to file and returns only a compact summary with interactive element refs — keeping large YAML out of context. Use `Read` on the saved YAML file when you need full page structure. NEVER use `playwright-cli snapshot` directly via Bash. NEVER snapshot pivot tables, large data views, or home page.
+- **Snapshot via MCP tool**: Use `mcp__metabase-repro__browser_snapshot(repro_dir="repro/<ISSUE-ID>", name="descriptive-name")` instead of `playwright-cli snapshot` via Bash. The MCP tool saves full YAML to file and returns only a compact summary with interactive element refs — keeping large YAML out of context. Only read the saved YAML file if the summary doesn't contain the element ref you need. NEVER use `playwright-cli snapshot` directly via Bash. NEVER snapshot pivot tables, large data views, or home page.
 - NEVER use `&` (background) with playwright-cli
 
 **Login and navigate** (use port from `start_metabase`):
@@ -216,10 +242,13 @@ Invoke the `metabase-reference` skill for REPL recipes, API patterns, domain qui
 playwright-cli open http://localhost:<PORT>/auth/login
 playwright-cli cookie-set metabase.SESSION "<session-token>" --domain=localhost
 playwright-cli goto http://localhost:<PORT>/question/1
+mkdir -p ./repro/<ISSUE-ID>/playwright
 playwright-cli screenshot --filename=./repro/<ISSUE-ID>/playwright/screenshot.png
 ```
 
-Get session token from `get_session_token` or read `./repro/<ISSUE-ID>/session-token`.
+Get session token from `get_session_token` or read `./repro/<ISSUE-ID>/session-token-<email>`.
+
+> **`api_call` requires `email`**: Every `api_call` must include `email` (e.g., `email="crowberto@metabase.com"`). Call `get_session_token` for each user before making API calls as them.
 
 > **"Start exploring" modal**: Metabase shows this on first native question view. Snapshot to find button ref and click to dismiss.
 
@@ -263,15 +292,17 @@ WebFetch https://www.metabase.com/docs/latest/<relevant-section>
 
 Evaluate: what was tested, actual result, whether it matches reported behavior. Self-critique: "Did I test the right thing?"
 
-> **Code analysis as reproduction**: If the defective code path is unambiguously identified in source AND either (a) a fix exists in a newer version, or (b) the logic error is self-evident, classify as REPRODUCED (via code analysis). Note in the report that reproduction was via source review, not live testing.
+> **Code analysis as reproduction**: If the defective code path is unambiguously identified in source AND a fix exists in a newer version, classify as SEEN FIXED (via code analysis). If the logic error is self-evident and still present on master, classify as REPRODUCED (via code analysis). Note in the report that reproduction was via source review, not live testing.
 
-**Stop when**: REPRODUCED, NOT REPRODUCED, or after 3 inconclusive attempts → INCONCLUSIVE.
+**Stop when**: REPRODUCED, SEEN FIXED, NOT REPRODUCED, or after 3 inconclusive attempts → INCONCLUSIVE.
 
 ---
 
 ## Phase 5: Write Failing Test
 
-> **Gate**: Only if status is REPRODUCED. Otherwise skip to Phase 6.
+> **Gate**: Only if status is REPRODUCED (still broken on master). Skip for SEEN FIXED, NOT REPRODUCED, or INCONCLUSIVE — proceed to Phase 6.
+>
+> **Time gate**: If more than 18 minutes have elapsed since Phase 0, skip Phase 5 and note "Time budget exceeded — failing test not written" in the report. Proceed to Phase 6.
 
 Invoke the `write-test` skill. Continue to Phase 6 after completion.
 
@@ -283,8 +314,9 @@ Invoke the `write-test` skill. Continue to Phase 6 after completion.
 
 ### Classification
 
-- **REPRODUCED** — reported behavior was observed
-- **NOT REPRODUCED** — instance behaved correctly
+- **REPRODUCED** — reported behavior was observed and is still present on master
+- **SEEN FIXED** — reported behavior was reproduced on the reported version, but a fix was found in a newer version. Use `git log --oneline --all --grep="<keyword>" -C ./repro/<ISSUE-ID>/source/` to identify the fix commit and include it in the report.
+- **NOT REPRODUCED** — instance behaved correctly; could not trigger the reported behavior
 - **INCONCLUSIVE** — environment constraints, missing driver, etc.
 
 ### Compose Linear Comment
@@ -292,7 +324,7 @@ Invoke the `write-test` skill. Continue to Phase 6 after completion.
 ```markdown
 ## Repro-Bot Investigation
 
-**Status**: REPRODUCED / NOT REPRODUCED / INCONCLUSIVE
+**Status**: REPRODUCED / SEEN FIXED / NOT REPRODUCED / INCONCLUSIVE
 **Metabase Version**: <version tested>
 **Application Database**: H2 / Postgres / MySQL / MariaDB
 
@@ -310,7 +342,8 @@ Invoke the `write-test` skill. Continue to Phase 6 after completion.
 
 ### Root Cause Hypothesis (if identified)
 <If REPRODUCED and clear: likely cause>
-<If unclear: "Root cause not determined — reproduction steps above demonstrate the bug.">
+<If REPRODUCED unclear: "Root cause not determined — reproduction steps above demonstrate the bug.">
+<If SEEN FIXED: identify the fix commit and what it changed>
 <If NOT REPRODUCED: why it may work locally but fail in reported environment>
 <If INCONCLUSIVE: what additional setup needed>
 
@@ -337,16 +370,6 @@ Invoke the `write-test` skill. Continue to Phase 6 after completion.
 ```
 mcp__linear-server__save_comment(issueId: "<LINEAR-ID>", body: "<comment body>")
 ```
-
-### Label the Issue
-
-| Status | Label |
-|--------|-------|
-| REPRODUCED | `.Auto Repro Success` |
-| NOT REPRODUCED | `.Auto Repro Failed` |
-| INCONCLUSIVE | `.Auto Repro Inconclusive` |
-
-The `labels` parameter REPLACES all labels — always include existing labels. Use the **exact full label names** above (e.g. `.Auto Repro Success`, NOT `.Auto Repro`). Fetch labels **once** with `list_issue_labels` at the start of Phase 6. Do not re-fetch — do NOT retry with partial names or variations if denied.
 
 If a Playwright screenshot was captured, describe it in the comment. Do NOT attach via `create_attachment` with base64 (known to fail).
 

@@ -48,7 +48,7 @@ def write_state_file(repro_dir: str, filename: str, value: str) -> None:
 def load_state(repro_dir: str) -> dict:
     """Load all state files from a repro directory into memory."""
     state = {}
-    for key, filename in [("port", "port"), ("session_token", "session-token"), ("appdb_port", "appdb-port")]:
+    for key, filename in [("port", "port"), ("appdb_port", "appdb-port")]:
         val = read_state_file(repro_dir, filename)
         if val:
             state[key] = val
